@@ -1,0 +1,84 @@
+# Vhost template for one environment. Replace <domain> and <site-dir> (the REMOTE_PATH variable of
+# that GitHub environment), e.g. /home/payroll-staging/htdocs/staging.payroll.example.com.
+# The {{…}} placeholders are filled in by the hosting panel, as on the other sites of this VPS.
+# The app binds no port of its own: PHP-FPM serves /api, nginx serves the built single-page app.
+
+# ─── HTTP → HTTPS ──────────────────────────────────────────
+server {
+  server_tokens off;
+  listen 80;
+  listen [::]:80;
+
+  server_name <domain>;
+
+  location ^~ /.well-known/acme-challenge/ {
+    root  <site-dir>;
+    allow all;
+    try_files $uri =404;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+# ─── HTTPS ─────────────────────────────────────────────────
+server {
+  server_tokens off;
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  http2 on;
+
+  {{ssl_certificate}}
+  {{ssl_certificate_key}}
+
+  server_name <domain>;
+
+  # "current" is the symlink the deploy switches last. $realpath_root below makes PHP-FPM see the
+  # release directory itself, so a deploy takes effect at once instead of when opcache next looks.
+  root  <site-dir>/current/public;
+  index index.php;
+
+  # A payroll workbook upload is capped at 2 MB by the app.
+  client_max_body_size 4M;
+
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "same-origin" always;
+
+  # Built app assets carry a content hash in their name, so they can be cached for good.
+  location ^~ /spa/assets/ {
+    expires max;
+    access_log off;
+    try_files $uri =404;
+  }
+
+  # Everything else: a real file if there is one, otherwise the front controller, which answers
+  # /api/* and serves the app's index.html for every browser route.
+  location / {
+    try_files $uri /index.php?$query_string;
+  }
+
+  location = /index.php {
+    include fastcgi_params;
+    fastcgi_pass 127.0.0.1:{{php_fpm_port}};
+
+    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+    fastcgi_param DOCUMENT_ROOT   $realpath_root;
+    fastcgi_param HTTPS           "on";
+    fastcgi_param SERVER_PORT     443;
+    fastcgi_param PHP_VALUE       "session.auto_start=0";
+
+    fastcgi_read_timeout 120;
+  }
+
+  # No other PHP file is reachable, and no dotfile.
+  location ~ \.php$ {
+    return 404;
+  }
+
+  location ~ /\. {
+    deny all;
+  }
+}

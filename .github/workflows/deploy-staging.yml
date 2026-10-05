@@ -1,0 +1,20 @@
+# name: Deploy Staging
+
+# # A push to staging (a merge from dev) verifies and deploys to the staging site.
+
+# on:
+#   push:
+#     branches: [staging]
+#   workflow_dispatch:
+
+# # One staging deploy at a time; a second push waits rather than cancelling a deploy mid-migration.
+# concurrency:
+#   group: deploy-staging
+#   cancel-in-progress: false
+
+# jobs:
+#   deploy:
+#     uses: ./.github/workflows/deploy.yml
+#     with:
+#       environment: staging
+#     secrets: inherit

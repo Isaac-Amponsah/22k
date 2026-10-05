@@ -1,0 +1,30 @@
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+!.env.environment.example
+
+# Database seeds hold role passwords: only the template is tracked
+/database/seeds/*.sql
+!/database/seeds/roles.example.sql
+!/database/seeds/admin.example.sql
+
+# Dependencies and build output
+/vendor/
+/frontend/node_modules/
+/public/spa/
+
+# Payroll data must never be committed: workbooks, exports, dumps
+*.xlsx
+*.xls
+*.csv
+*.sql.gz
+*.dump
+*.backup
+
+# Tooling
+.phpunit.cache/
+.phpunit.result.cache
+*.log
+.vscode/
+.idea/

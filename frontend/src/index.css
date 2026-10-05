@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. The look is a bookkeeper's ledger: quiet paper, green ink, hairline rules, figures
+ * in tabular numerals. The one loud element is the client binder colour (see lib/clientBinder.ts):
+ * every screen inside a client's books wears that client's colour, so it is always obvious whose
+ * payroll is open.
+ */
+@theme {
+  --color-paper: #f1f3ee;
+  --color-surface: #ffffff;
+  --color-ink: #17211c;
+  --color-ink-soft: #56625b;
+  --color-rule: #d3d9d1;
+  --color-ledger: #1f4d3a;
+  --color-ledger-deep: #163a2b;
+  --color-ledger-tint: #e6eee9;
+  --color-attention: #9a6410;
+  --color-attention-tint: #fbf1dc;
+  --color-refusal: #a3302a;
+  --color-refusal-tint: #fbe9e7;
+
+  --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-serif: "IBM Plex Serif", Georgia, serif;
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* Money columns line up digit under digit. */
+.figure {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ledger);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: rgb(23 33 28 / 0.45);
+}
+
+/* Sign-in page: binders on a shelf. Each rises into place once when the page opens; the open
+   client's binder then stands a little proud of the others. */
+.binder-spine {
+  box-shadow:
+    inset -6px 0 0 rgb(0 0 0 / 0.14),
+    inset 2px 0 0 rgb(255 255 255 / 0.12);
+  animation: binder-rise 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.binder-spine-open {
+  translate: 0 -0.75rem;
+  box-shadow:
+    inset -6px 0 0 rgb(0 0 0 / 0.14),
+    inset 2px 0 0 rgb(255 255 255 / 0.12),
+    0 0.75rem 0 -0.25rem rgb(23 33 28 / 0.18);
+}
+
+@keyframes binder-rise {
+  from {
+    transform: translateY(40%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .binder-spine {
+    animation: none;
+  }
+}
+
+/* Printing from inside the app (a payroll schedule): hide the app's own chrome. */
+@media print {
+  .screen-only {
+    display: none !important;
+  }
+}

@@ -1,0 +1,126 @@
+name: Verify
+
+# The gate. Nothing is promoted or deployed unless the payroll arithmetic is right AND one client's
+# data provably cannot reach another's on a real Postgres.
+#   - dev deploys nowhere, but every push to it and every pull request runs this.
+#   - deploy.yml calls this first and ships the frontend build it produces.
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+  workflow_call:
+
+jobs:
+  verify:
+    name: Syntax, unit tests, client isolation, frontend build
+    runs-on: ubuntu-latest
+
+    # Throwaway database on the GitHub runner (not the VPS). Lives for this job only.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci-superuser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, zip, gd, fileinfo, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Syntax check
+        run: |
+          set -e
+          find app/ public/ config/ database/ bin/ tests/ -name "*.php" -print0 \
+            | xargs -0 -n1 -P4 php -l > /dev/null
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Run unit tests
+        run: vendor/bin/phpunit --testsuite Unit --no-progress
+
+      # Seeded from the same template a real environment's seed is copied from (the real seeds hold
+      # passwords and are not in git): an owner for migrations and an application role that owns
+      # nothing and cannot bypass row-level security. Role names start with a digit on purpose: SQL
+      # takes such names only quoted, and the seed and migrations must cope. APP_ENV is local because
+      # the integration tests refuse to run anywhere else.
+      - name: Prepare the throwaway database
+        env:
+          PGPASSWORD: ci-superuser
+        run: |
+          set -e
+          sed -e 's/<environment>/local/g' \
+              -e 's/<owner_role>/22k_owner/g' -e 's/<owner_password>/ci-owner/g' \
+              -e 's/<application_role>/22k_app/g' -e 's/<application_password>/ci-app/g' \
+              -e 's/<database>/payroll_ci/g' \
+              database/seeds/roles.example.sql > "$RUNNER_TEMP/roles.ci.sql"
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/roles.ci.sql"
+          printf 'APP_NAME=Payroll\nAPP_ENV=local\nAPP_TIMEZONE=Africa/Accra\n' > .env
+          {
+            echo 'DB_HOST=127.0.0.1'
+            echo 'DB_PORT=5432'
+            echo 'DB_DATABASE=payroll_ci'
+            echo 'DB_USERNAME=22k_app'
+            echo 'DB_PASSWORD=ci-app'
+            echo 'DB_ADMIN_USERNAME=22k_owner'
+            echo 'DB_ADMIN_PASSWORD=ci-owner'
+          } > .env.local
+
+      # Also proves every migration applies to an empty database, and runs migrate.php's own
+      # isolation checks (application role attributes, forced row-level security on every client table).
+      - name: Run migrations
+        run: php database/migrate.php
+
+      # The admin seed template, run the way a real one is: after the migrations, as the owner role.
+      # Twice, because running it again must update the account, not fail.
+      - name: Run the admin seed template
+        env:
+          PGPASSWORD: ci-owner
+        run: |
+          set -e
+          sed -e 's/<environment>/local/g' -e 's/<admin_email>/admin@ci.test/g' \
+              -e 's/<admin_password>/ci-admin-password/g' \
+              -e 's/<admin_first_name>/Ci/g' -e 's/<admin_last_name>/Admin/g' \
+              database/seeds/admin.example.sql > "$RUNNER_TEMP/admin.ci.sql"
+          psql -h 127.0.0.1 -U 22k_owner -d payroll_ci -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/admin.ci.sql"
+          psql -h 127.0.0.1 -U 22k_owner -d payroll_ci -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/admin.ci.sql"
+
+      # A skipped isolation test is a gate that did not close: fail on skips.
+      - name: Run client isolation tests
+        run: vendor/bin/phpunit --testsuite Integration --no-progress --fail-on-skipped
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # A deploy ships exactly the build that passed here.
+      - name: Keep the built app for the deploy job
+        uses: actions/upload-artifact@v4
+        with:
+          name: spa
+          path: public/spa
+          if-no-files-found: error
+          retention-days: 1
