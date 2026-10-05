@@ -3,7 +3,7 @@
 // look alike. The colour follows the client's id, so it is the same on every visit.
 
 const BINDER_COLOURS = [
-  { spine: "#1f4d3a", tint: "#e6eee9" }, // ledger green
+  { spine: "#1f4d3a", tint: "#e6eee9" }, // bottle green
   { spine: "#8a3b12", tint: "#f6e9e1" }, // oxblood
   { spine: "#1e4b7a", tint: "#e4edf6" }, // navy
   { spine: "#6b4a8c", tint: "#eee8f4" }, // plum

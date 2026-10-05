@@ -55,7 +55,7 @@ export function SalariesPage() {
           client.is_archived ? null : (
             <Link
               to="import"
-              className="inline-flex items-center rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-medium hover:bg-ledger-tint"
+              className="inline-flex items-center rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-medium hover:bg-brand-tint"
             >
               Import from Excel
             </Link>
@@ -146,7 +146,7 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
         {employees.length === 0 ? (
           <EmptyState>
             No active employees.{" "}
-            <Link to="../employees" className="font-medium text-ledger underline">
+            <Link to="../employees" className="font-medium text-brand underline">
               Add employees
             </Link>{" "}
             or import a payroll sheet.

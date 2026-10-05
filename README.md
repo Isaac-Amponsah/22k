@@ -45,6 +45,23 @@ php database/migrate.php
 cd frontend && npm install
 ```
 
+### Mail (sending payroll to a client's bank)
+
+Add the SMTP server to the environment's own file (`.env.local`, `.env.staging`, `.env.production`). Until `MAIL_HOST` and
+`MAIL_FROM_ADDRESS` are set, the Send to bank dialog opens but cannot send.
+
+```bash
+MAIL_HOST=smtp.example.com
+MAIL_PORT=587
+MAIL_ENCRYPTION=tls          # tls | ssl | none
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_FROM_ADDRESS=payroll@example.com
+MAIL_FROM_NAME=              # defaults to APP_NAME
+```
+
+The bank's replies go to the accountant who sent the email (Reply-To), not to `MAIL_FROM_ADDRESS`.
+
 ## Run locally
 
 ```bash

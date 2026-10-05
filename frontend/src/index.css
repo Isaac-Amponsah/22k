@@ -1,20 +1,24 @@
 @import "tailwindcss";
 
 /*
- * Design tokens. The look is a bookkeeper's ledger: quiet paper, green ink, hairline rules, figures
- * in tabular numerals. The one loud element is the client binder colour (see lib/clientBinder.ts):
+ * Design tokens. Cool paper, indigo ink, a midnight sidebar, white cards with a soft lift, figures in
+ * tabular numerals. The one loud element is the client binder colour (see lib/clientBinder.ts):
  * every screen inside a client's books wears that client's colour, so it is always obvious whose
  * payroll is open.
  */
 @theme {
-  --color-paper: #f1f3ee;
+  --color-paper: #f3f4fa;
   --color-surface: #ffffff;
-  --color-ink: #17211c;
-  --color-ink-soft: #56625b;
-  --color-rule: #d3d9d1;
-  --color-ledger: #1f4d3a;
-  --color-ledger-deep: #163a2b;
-  --color-ledger-tint: #e6eee9;
+  --color-ink: #14162e;
+  --color-ink-soft: #5c607a;
+  --color-rule: #e1e3ef;
+  --color-brand: #3b46d6;
+  --color-brand-deep: #2a32a8;
+  --color-brand-tint: #eaecfd;
+  --color-brand-glow: #8f9bff;
+  --color-sidebar: #12153a;
+  --color-success: #17794a;
+  --color-success-tint: #e3f4ea;
   --color-attention: #9a6410;
   --color-attention-tint: #fbf1dc;
   --color-refusal: #a3302a;
@@ -22,6 +26,8 @@
 
   --font-sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --font-serif: "IBM Plex Serif", Georgia, serif;
+
+  --shadow-card: 0 1px 2px rgb(20 22 46 / 0.05), 0 10px 28px -14px rgb(20 22 46 / 0.18);
 }
 
 html {
@@ -43,21 +49,50 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-ledger);
+  outline: 2px solid var(--color-brand);
   outline-offset: 2px;
 }
 
 dialog::backdrop {
-  background: rgb(23 33 28 / 0.45);
+  background: rgb(20 22 46 / 0.5);
 }
 
-/* Sign-in page: binders on a shelf. Each rises into place once when the page opens; the open
-   client's binder then stands a little proud of the others. */
+/* A client's binder seen spine-on, as it stands on a shelf. */
 .binder-spine {
   box-shadow:
     inset -6px 0 0 rgb(0 0 0 / 0.14),
     inset 2px 0 0 rgb(255 255 255 / 0.12);
+}
+
+/* Sign-in page: binders on a shelf. Each rises into place once when the page opens; the open
+   client's binder then stands a little proud of the others. */
+.binder-shelf .binder-spine {
   animation: binder-rise 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Dashboard: a binder is the way into its client's month, and comes forward when reached for. */
+.binder-link {
+  transition: translate 140ms ease-out;
+}
+
+.binder-link:hover,
+.binder-link:focus-visible {
+  translate: 0 -0.375rem;
+}
+
+/* The client's name, written up the label on the spine. */
+.binder-label {
+  writing-mode: vertical-rl;
+  rotate: 180deg;
+  max-height: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The signed-in sidebar is dark: the indigo focus ring would vanish against it. */
+.accountant-sidebar :focus-visible {
+  outline-color: #ffffff;
 }
 
 .binder-spine-open {
@@ -80,8 +115,12 @@ dialog::backdrop {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .binder-spine {
+  .binder-shelf .binder-spine {
     animation: none;
+  }
+
+  .binder-link {
+    transition: none;
   }
 }
 

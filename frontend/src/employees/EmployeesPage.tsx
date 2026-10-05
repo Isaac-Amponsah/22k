@@ -19,6 +19,10 @@ interface EmployeeFormValues {
   hire_date: string;
   ssnit_number: string;
   tax_identification_number: string;
+  bank_account_number: string;
+  bank_name: string;
+  bank_branch: string;
+  bank_sort_code: string;
   is_active: boolean;
 }
 
@@ -32,6 +36,10 @@ function formValuesOf(employee: Employee | null): EmployeeFormValues {
     hire_date: employee?.hire_date ?? "",
     ssnit_number: employee?.ssnit_number ?? "",
     tax_identification_number: employee?.tax_identification_number ?? "",
+    bank_account_number: employee?.bank_account_number ?? "",
+    bank_name: employee?.bank_name ?? "",
+    bank_branch: employee?.bank_branch ?? "",
+    bank_sort_code: employee?.bank_sort_code ?? "",
     is_active: employee?.is_active ?? true,
   };
 }
@@ -82,6 +90,7 @@ export function EmployeesPage() {
                   <th className="px-4 py-3 font-medium">Department</th>
                   <th className="px-4 py-3 font-medium">Hired</th>
                   <th className="px-4 py-3 font-medium">SSNIT number</th>
+                  <th className="px-4 py-3 font-medium">Bank account</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -95,6 +104,16 @@ export function EmployeesPage() {
                     <td className="px-4 py-3">{employee.department_name ?? "—"}</td>
                     <td className="px-4 py-3">{formatDate(employee.hire_date)}</td>
                     <td className="px-4 py-3">{employee.ssnit_number ?? "—"}</td>
+                    <td className="px-4 py-3">
+                      {employee.bank_account_number ? (
+                        <>
+                          {employee.bank_account_number}
+                          {employee.bank_name ? <span className="block text-ink-soft">{employee.bank_name}</span> : null}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="px-4 py-3">{employee.is_active ? "Active" : <span className="text-ink-soft">Not active</span>}</td>
                     <td className="px-4 py-3 text-right">
                       <Button onClick={() => setFormTarget(employee)} disabled={client.is_archived}>
@@ -176,6 +195,10 @@ function EmployeeFormDialog({ clientId, target, onClose, onSaved }: EmployeeForm
           <TextField label="Department" maxLength={100} {...fieldProps("department_name")} />
           <TextField label="SSNIT number" maxLength={30} {...fieldProps("ssnit_number")} />
           <TextField label="TIN" maxLength={30} {...fieldProps("tax_identification_number")} />
+          <TextField label="Bank" maxLength={100} {...fieldProps("bank_name")} />
+          <TextField label="Bank branch" maxLength={100} {...fieldProps("bank_branch")} />
+          <TextField label="Account number" maxLength={30} inputMode="numeric" {...fieldProps("bank_account_number")} />
+          <TextField label="Sort code" maxLength={10} inputMode="numeric" {...fieldProps("bank_sort_code")} />
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input

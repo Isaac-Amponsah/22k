@@ -49,7 +49,7 @@ export function SignInPage() {
     <main className="grid min-h-screen bg-surface lg:grid-cols-[minmax(0,1.25fr)_minmax(24rem,1fr)]">
       <section className="flex flex-col justify-between gap-8 bg-paper px-6 pt-8 sm:px-10 lg:px-14 lg:pt-14">
         <div>
-          <p className="font-serif text-xl font-semibold text-ledger">{appName}</p>
+          <p className="font-serif text-xl font-semibold text-brand">{appName}</p>
           <h1 className="mt-6 max-w-xl font-serif text-3xl leading-[1.15] font-semibold text-ink sm:text-4xl lg:mt-16 lg:text-5xl">
             Every Client is specially treated.
           </h1>
@@ -89,7 +89,7 @@ export function SignInPage() {
                 <button
                   type="button"
                   aria-pressed={isPasswordShown}
-                  className="rounded text-sm font-medium text-ledger underline-offset-2 hover:underline"
+                  className="rounded text-sm font-medium text-brand underline-offset-2 hover:underline"
                   onClick={() => setIsPasswordShown((isShown) => !isShown)}
                 >
                   {isPasswordShown ? "Hide password" : "Show password"}

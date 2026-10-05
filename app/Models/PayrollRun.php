@@ -46,6 +46,21 @@ final class PayrollRun {
 	}
 
 	/**
+	 * A Client's run for one month, with the figures the dashboard shows, or null when there is none.
+	 *
+	 * @param string $payPeriod Y-m-d, first day of the month.
+	 */
+	public static function findSummaryForClientPeriod(int $clientId, string $payPeriod): ?array {
+		return Database::fetchOne(
+			'SELECT payroll_run_id, pay_period, status, employee_count,
+			        total_paye, total_net_pay, total_employee_ssnit, total_employer_ssnit
+			 FROM payroll_runs
+			 WHERE client_id = ? AND pay_period = ? AND deleted_at IS NULL',
+			[$clientId, $payPeriod]
+		);
+	}
+
+	/**
 	 * Lock a Client's run for the rest of the transaction so two requests cannot both change it.
 	 */
 	public static function lockForUpdate(int $payrollRunId, int $clientId): ?array {
@@ -95,6 +110,22 @@ final class PayrollRun {
 			'SELECT * FROM payroll_run_lines
 			 WHERE payroll_run_id = ? AND client_id = ?
 			 ORDER BY line_order ASC, payroll_run_line_id ASC',
+			[$payrollRunId, $clientId]
+		);
+	}
+
+	/**
+	 * A run's lines as the bank needs them: who is paid, how much, and into which account. The account
+	 * is the employee's as it stands now, so one added after the run was finalised is picked up.
+	 */
+	public static function getBankPaymentLines(int $payrollRunId, int $clientId): array {
+		return Database::fetchAll(
+			'SELECT line.employee_name, line.net_pay,
+			        employee.bank_account_number, employee.bank_name, employee.bank_branch, employee.bank_sort_code
+			 FROM payroll_run_lines line
+			 JOIN employees employee ON employee.employee_id = line.employee_id AND employee.client_id = line.client_id
+			 WHERE line.payroll_run_id = ? AND line.client_id = ?
+			 ORDER BY line.line_order ASC, line.payroll_run_line_id ASC',
 			[$payrollRunId, $clientId]
 		);
 	}

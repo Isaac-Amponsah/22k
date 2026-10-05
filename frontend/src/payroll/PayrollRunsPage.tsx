@@ -74,7 +74,7 @@ export function PayrollRunsPage() {
                   {runs.map((run) => (
                     <tr key={run.payroll_run_id} className="border-b border-rule/60 last:border-0">
                       <td className="px-4 py-3">
-                        <Link to={String(run.payroll_run_id)} className="font-medium text-ledger underline underline-offset-2">
+                        <Link to={String(run.payroll_run_id)} className="font-medium text-brand underline underline-offset-2">
                           {formatPayMonth(run.pay_period)}
                         </Link>
                       </td>

@@ -2,18 +2,23 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, errorMessage, fieldErrorsOf } from "../lib/apiClient";
 import { clientBinder } from "../lib/clientBinder";
 import { queryKeys } from "../lib/queryKeys";
 import { Button, ConfirmDialog, Dialog, EmptyState, LoadingState, Notice, PageHeading, TextField } from "../shared/ui";
 import type { Client } from "../types";
+import { useClientsQuery } from "./useClientsQuery";
 
 type ClientFormValues = Record<
   "client_name" | "tax_identification_number" | "ssnit_employer_number" | "contact_email" | "contact_phone" | "postal_address",
   string
 >;
+
+// Archiving is switched off for now: no client card offers it. A client archived earlier still shows
+// under "Archived" with Restore, so none is left stranded. The API routes are untouched.
+const IS_CLIENT_ARCHIVING_OFFERED = false;
 
 function formValuesOf(client: Client | null): ClientFormValues {
   return {
@@ -28,14 +33,20 @@ function formValuesOf(client: Client | null): ClientFormValues {
 
 export function ClientsPage() {
   const queryClient = useQueryClient();
-  const [formTarget, setFormTarget] = useState<Client | "new" | null>(null);
+  // The dashboard's "Add client" card arrives here as /clients?add: the form opens straight away.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [formTarget, setFormTarget] = useState<Client | "new" | null>(() => (searchParams.has("add") ? "new" : null));
   const [archiveTarget, setArchiveTarget] = useState<Client | null>(null);
   const [notice, setNotice] = useState<{ tone: "success" | "refusal"; text: string } | null>(null);
 
-  const clientsQuery = useQuery({
-    queryKey: queryKeys.clients(),
-    queryFn: async () => (await api.get<{ clients: Client[] }>("/api/clients")).data.clients,
-  });
+  const clientsQuery = useClientsQuery();
+
+  function closeForm() {
+    setFormTarget(null);
+    if (searchParams.has("add")) {
+      setSearchParams({}, { replace: true });
+    }
+  }
 
   const archiveMutation = useMutation({
     mutationFn: (client: Client) => api.post(`/api/clients/${client.client_id}/${client.is_archived ? "restore" : "archive"}`),
@@ -96,9 +107,9 @@ export function ClientsPage() {
       <ClientFormDialog
         key={formTarget === null ? "closed" : formTarget === "new" ? "new" : formTarget.client_id}
         target={formTarget}
-        onClose={() => setFormTarget(null)}
+        onClose={closeForm}
         onSaved={(message) => {
-          setFormTarget(null);
+          closeForm();
           setNotice({ tone: "success", text: message });
         }}
       />
@@ -132,7 +143,7 @@ function ClientBinderCard({ client, onEdit, onArchive }: ClientBinderCardProps) 
   return (
     <li
       style={{ borderLeftColor: binder.spine }}
-      className={`flex flex-col rounded-lg border border-l-[10px] border-rule bg-surface ${client.is_archived ? "opacity-70" : ""}`}
+      className={`flex flex-col rounded-xl border border-l-[10px] border-rule bg-surface shadow-card ${client.is_archived ? "opacity-70" : ""}`}
     >
       <Link to={`/clients/${client.client_id}`} className="block flex-1 rounded-tr-lg px-5 pt-5 pb-4 hover:bg-paper/60">
         <span style={{ color: binder.spine }} className="font-serif text-xl font-semibold leading-snug">
@@ -144,7 +155,8 @@ function ClientBinderCard({ client, onEdit, onArchive }: ClientBinderCardProps) 
       </Link>
       <div className="flex gap-2 border-t border-rule px-5 py-3">
         <Button onClick={() => onEdit(client)}>Edit details</Button>
-        <Button onClick={() => onArchive(client)}>{client.is_archived ? "Restore" : "Archive"}</Button>
+        {client.is_archived ? <Button onClick={() => onArchive(client)}>Restore</Button> : null}
+        {!client.is_archived && IS_CLIENT_ARCHIVING_OFFERED ? <Button onClick={() => onArchive(client)}>Archive</Button> : null}
       </div>
     </li>
   );

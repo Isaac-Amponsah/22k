@@ -8,7 +8,8 @@ import { api, errorMessage } from "../lib/apiClient";
 import { formatDate, formatMoney, formatPayMonth, formatPercent } from "../lib/formatting";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
 import { Button, ConfirmDialog, EmptyState, LoadingState, Notice, PageHeading, Panel, RunStatusBadge } from "../shared/ui";
-import type { PayrollRun } from "../types";
+import type { PayrollRun, RunBankEmail } from "../types";
+import { SendToBankDialog } from "./SendToBankDialog";
 
 type RunAction = "recalculate" | "finalise" | "mark-paid" | "delete";
 
@@ -31,7 +32,7 @@ const CONFIRMATIONS: Record<Exclude<RunAction, "recalculate">, { title: string; 
 };
 
 const LINK_BUTTON_CLASSES =
-  "inline-flex items-center justify-center rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-medium hover:bg-ledger-tint";
+  "inline-flex items-center justify-center rounded-md border border-rule bg-surface px-3.5 py-2 text-sm font-medium hover:bg-brand-tint";
 
 export function PayrollRunPage() {
   const client = useClientInScope();
@@ -42,10 +43,18 @@ export function PayrollRunPage() {
 
   const [pendingConfirmation, setPendingConfirmation] = useState<Exclude<RunAction, "recalculate"> | null>(null);
   const [notice, setNotice] = useState<{ tone: "success" | "refusal"; text: string } | null>(null);
+  const [isSendToBankOpen, setIsSendToBankOpen] = useState(false);
 
   const runQuery = useQuery({
     queryKey: queryKeys.payrollRun(client.client_id, payrollRunId),
     queryFn: async () => (await api.get<{ run: PayrollRun }>(runPath)).data.run,
+  });
+
+  // A draft is never sent to the bank, so there is nothing to fetch for one.
+  const bankEmailQuery = useQuery({
+    queryKey: queryKeys.runBankEmail(client.client_id, payrollRunId),
+    queryFn: async () => (await api.get<{ bank_email: RunBankEmail }>(`${runPath}/bank-email`)).data.bank_email,
+    enabled: runQuery.data !== undefined && runQuery.data.status !== "draft",
   });
 
   const actionMutation = useMutation({
@@ -70,7 +79,7 @@ export function PayrollRunPage() {
     return (
       <EmptyState>
         {errorMessage(runQuery.error)}{" "}
-        <Link to=".." relative="path" className="font-medium text-ledger underline">
+        <Link to=".." relative="path" className="font-medium text-brand underline">
           Back to payroll
         </Link>
       </EmptyState>
@@ -81,6 +90,8 @@ export function PayrollRunPage() {
   const lines = run.lines ?? [];
   const isDraft = run.status === "draft";
   const canChange = !client.is_archived && !actionMutation.isPending;
+  // Latest first.
+  const lastSentBankEmail = bankEmailQuery.data?.sent_emails[0];
 
   return (
     <>
@@ -151,7 +162,7 @@ export function PayrollRunPage() {
                           <Link
                             to={`payslips?line=${line.payroll_run_line_id}`}
                             target="_blank"
-                            className="text-ledger underline underline-offset-2"
+                            className="text-brand underline underline-offset-2"
                           >
                             Payslip
                           </Link>
@@ -205,9 +216,17 @@ export function PayrollRunPage() {
               </Button>
             ) : null}
             {isDraft ? null : (
-              <Link to="payslips" target="_blank" className={LINK_BUTTON_CLASSES}>
-                Print all payslips
-              </Link>
+              <>
+                <Button disabled={!canChange} onClick={() => setIsSendToBankOpen(true)}>
+                  Send to bank
+                </Button>
+                <a href={`${runPath}/bank-file`} className={LINK_BUTTON_CLASSES}>
+                  Download bank file
+                </a>
+                <Link to="payslips" target="_blank" className={LINK_BUTTON_CLASSES}>
+                  Print all payslips
+                </Link>
+              </>
             )}
             {/* A plain link: the browser downloads the workbook with the session cookie. */}
             <a href={`${runPath}/export`} className={LINK_BUTTON_CLASSES}>
@@ -239,6 +258,16 @@ export function PayrollRunPage() {
                   </dd>
                 </div>
               ) : null}
+              {lastSentBankEmail ? (
+                <div>
+                  <dt className="text-ink-soft">Sent to bank</dt>
+                  <dd>
+                    {formatDate(lastSentBankEmail.sent_at)}
+                    {lastSentBankEmail.sent_by_name ? ` by ${lastSentBankEmail.sent_by_name}` : ""}
+                  </dd>
+                  <dd className="break-words text-ink-soft">{lastSentBankEmail.recipient_emails.join(", ")}</dd>
+                </div>
+              ) : null}
             </dl>
           </Panel>
         </aside>
@@ -253,6 +282,18 @@ export function PayrollRunPage() {
         isWorking={actionMutation.isPending}
         onConfirm={() => pendingConfirmation && actionMutation.mutate(pendingConfirmation)}
         onCancel={() => setPendingConfirmation(null)}
+      />
+
+      <SendToBankDialog
+        isOpen={isSendToBankOpen}
+        clientId={client.client_id}
+        payrollRunId={payrollRunId}
+        bankEmail={bankEmailQuery.data}
+        onClose={() => setIsSendToBankOpen(false)}
+        onSent={(message) => {
+          setIsSendToBankOpen(false);
+          setNotice({ tone: "success", text: message });
+        }}
       />
     </>
   );

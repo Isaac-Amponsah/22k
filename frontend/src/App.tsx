@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { BankEmailSettingsPage } from "./bank/BankEmailSettingsPage";
 import { ClientsPage } from "./clients/ClientsPage";
 import { ClientWorkspace } from "./clients/ClientWorkspace";
+import { DashboardPage } from "./dashboard/DashboardPage";
 import { EmployeesPage } from "./employees/EmployeesPage";
 import { PayrollRunPage } from "./payroll/PayrollRunPage";
 import { PayrollRunsPage } from "./payroll/PayrollRunsPage";
@@ -41,7 +43,8 @@ export function App() {
       <Route path="/clients/:clientId/payroll/:payrollRunId/payslips" element={<PayslipsPage />} />
 
       <Route element={<AccountantShell />}>
-        <Route path="/" element={<ClientsPage />} />
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/clients" element={<ClientsPage />} />
         <Route path="/payroll-rates" element={<PayrollRatesPage />} />
         <Route path="/clients/:clientId" element={<ClientWorkspace />}>
           <Route index element={<Navigate to="payroll" replace />} />
@@ -50,6 +53,7 @@ export function App() {
           <Route path="salaries" element={<SalariesPage />} />
           <Route path="salaries/import" element={<SalaryImportPage />} />
           <Route path="employees" element={<EmployeesPage />} />
+          <Route path="bank" element={<BankEmailSettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

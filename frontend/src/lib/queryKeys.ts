@@ -4,12 +4,16 @@
 export const queryKeys = {
   clients: () => ["clients"] as const,
   rateSets: () => ["payroll-rates"] as const,
+  /** payMonth is "YYYY-MM", or "" for the current month. */
+  monthOverview: (payMonth: string) => ["month-overview", payMonth] as const,
 
   allOfClient: (clientId: number) => ["client", clientId] as const,
   employees: (clientId: number) => ["client", clientId, "employees"] as const,
   salaries: (clientId: number) => ["client", clientId, "salaries"] as const,
   payrollRuns: (clientId: number) => ["client", clientId, "payroll-runs"] as const,
   payrollRun: (clientId: number, payrollRunId: number) => ["client", clientId, "payroll-runs", payrollRunId] as const,
+  runBankEmail: (clientId: number, payrollRunId: number) => ["client", clientId, "payroll-runs", payrollRunId, "bank-email"] as const,
+  bankEmailSettings: (clientId: number) => ["client", clientId, "bank-email-settings"] as const,
 };
 
 /** The API address of something inside one client's books. */

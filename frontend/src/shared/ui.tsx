@@ -7,8 +7,8 @@ import type { PayrollRunStatus } from "../types";
 type ButtonVariant = "primary" | "quiet" | "danger";
 
 const BUTTON_VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: "bg-ledger text-white hover:bg-ledger-deep border-ledger",
-  quiet: "bg-surface text-ink hover:bg-ledger-tint border-rule",
+  primary: "bg-brand text-white hover:bg-brand-deep border-brand",
+  quiet: "bg-surface text-ink hover:bg-brand-tint border-rule",
   danger: "bg-surface text-refusal hover:bg-refusal-tint border-refusal/40",
 };
 
@@ -64,7 +64,7 @@ export function TextField({ label, error, hint, id, name, className = "", ...inp
 type NoticeTone = "success" | "refusal" | "attention";
 
 const NOTICE_TONE_CLASSES: Record<NoticeTone, string> = {
-  success: "border-ledger/30 bg-ledger-tint text-ledger-deep",
+  success: "border-success/30 bg-success-tint text-success",
   refusal: "border-refusal/30 bg-refusal-tint text-refusal",
   attention: "border-attention/30 bg-attention-tint text-attention",
 };
@@ -90,7 +90,7 @@ export function PageHeading({ title, description, actions }: { title: string; de
 }
 
 export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-lg border border-rule bg-surface ${className}`}>{children}</section>;
+  return <section className={`rounded-xl border border-rule bg-surface shadow-card ${className}`}>{children}</section>;
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
@@ -104,8 +104,8 @@ export function LoadingState() {
 const RUN_STATUS_LABELS: Record<PayrollRunStatus, string> = { draft: "Draft", finalised: "Finalised", paid: "Paid" };
 const RUN_STATUS_CLASSES: Record<PayrollRunStatus, string> = {
   draft: "bg-attention-tint text-attention",
-  finalised: "bg-ledger-tint text-ledger-deep",
-  paid: "bg-ledger text-white",
+  finalised: "bg-brand-tint text-brand-deep",
+  paid: "bg-success-tint text-success",
 };
 
 export function RunStatusBadge({ status }: { status: PayrollRunStatus }) {

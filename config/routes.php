@@ -12,7 +12,9 @@
  */
 
 use App\Controllers\AuthController;
+use App\Controllers\BankPayrollEmailController;
 use App\Controllers\ClientController;
+use App\Controllers\DashboardController;
 use App\Controllers\EmployeeController;
 use App\Controllers\PayrollController;
 use App\Controllers\PayrollRateController;
@@ -31,6 +33,9 @@ return static function (Router $router): void {
 	$router->add('GET', '/api/auth/session', [AuthController::class, 'session'], $open);
 	$router->add('POST', '/api/auth/login', [AuthController::class, 'login'], $open);
 	$router->add('POST', '/api/auth/logout', [AuthController::class, 'logout'], $open);
+
+	// One month across the accountant's Clients
+	$router->add('GET', '/api/dashboard', [DashboardController::class, 'show'], $signedIn);
 
 	// The accountant's Clients
 	$router->add('GET', '/api/clients', [ClientController::class, 'index'], $signedIn);
@@ -64,4 +69,11 @@ return static function (Router $router): void {
 	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/finalise', [PayrollController::class, 'finalise'], $clientScoped);
 	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/mark-paid', [PayrollController::class, 'markPaid'], $clientScoped);
 	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/export', [PayrollController::class, 'export'], $clientScoped);
+
+	// Sending one Client's payroll to its bank by email
+	$router->add('GET', '/api/clients/{clientId}/bank-email-settings', [BankPayrollEmailController::class, 'showSettings'], $clientScoped);
+	$router->add('PUT', '/api/clients/{clientId}/bank-email-settings', [BankPayrollEmailController::class, 'saveSettings'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email', [BankPayrollEmailController::class, 'showRunEmail'], $clientScoped);
+	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email', [BankPayrollEmailController::class, 'sendRunEmail'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-file', [BankPayrollEmailController::class, 'downloadBankFile'], $clientScoped);
 };

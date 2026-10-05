@@ -1,13 +1,11 @@
 // One client's books. Everything rendered inside works on the client named in the address, and wears
 // that client's binder colour so it is always plain whose payroll is on screen.
 
-import { useQuery } from "@tanstack/react-query";
 import { Link, NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom";
-import { api } from "../lib/apiClient";
 import { clientBinder } from "../lib/clientBinder";
-import { queryKeys } from "../lib/queryKeys";
 import { EmptyState, LoadingState, Notice } from "../shared/ui";
 import type { Client } from "../types";
+import { useClientsQuery } from "./useClientsQuery";
 
 interface ClientWorkspaceContext {
   client: Client;
@@ -22,16 +20,14 @@ const SECTIONS = [
   { path: "payroll", label: "Payroll" },
   { path: "salaries", label: "Salaries" },
   { path: "employees", label: "Employees" },
+  { path: "bank", label: "Bank" },
 ];
 
 export function ClientWorkspace() {
   const navigate = useNavigate();
   const clientIdInAddress = Number(useParams().clientId);
 
-  const clientsQuery = useQuery({
-    queryKey: queryKeys.clients(),
-    queryFn: async () => (await api.get<{ clients: Client[] }>("/api/clients")).data.clients,
-  });
+  const clientsQuery = useClientsQuery();
 
   if (clientsQuery.isPending) {
     return <LoadingState />;
@@ -41,7 +37,7 @@ export function ClientWorkspace() {
   if (!client) {
     return (
       <EmptyState>
-        This client is not in your list. <Link to="/" className="font-medium text-ledger underline">Back to your clients</Link>
+        This client is not in your list. <Link to="/clients" className="font-medium text-brand underline">Back to your clients</Link>
       </EmptyState>
     );
   }

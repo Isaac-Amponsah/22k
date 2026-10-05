@@ -78,7 +78,7 @@ export function PayrollRatesPage() {
                   <h2 className="font-serif text-lg font-semibold">
                     In force from {formatDate(rateSet.effective_from)}
                     {rateSet.statutory_rate_id === currentRateSetId ? (
-                      <span className="ml-2 rounded-full bg-ledger px-2.5 py-0.5 align-middle font-sans text-xs font-semibold text-white">
+                      <span className="ml-2 rounded-full bg-brand px-2.5 py-0.5 align-middle font-sans text-xs font-semibold text-white">
                         Current
                       </span>
                     ) : null}

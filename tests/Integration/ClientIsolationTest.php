@@ -9,7 +9,14 @@ use App\Helpers\Env;
 use App\Models\Client;
 use App\Models\Employee;
 use App\Models\EmployeeSalary;
+use App\Models\PayrollRun;
+use App\Models\PayrollRunBankEmail;
+use App\Models\PayrollStatutoryRate;
 use App\Models\User;
+use App\Services\BankPaymentFileService;
+use App\Services\BankPayrollEmailService;
+use App\Services\DashboardService;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -168,6 +175,116 @@ final class ClientIsolationTest extends TestCase {
 				[$this->betaClientId, $this->employeeIdByClient[$this->alphaClientId]]
 			);
 		});
+	}
+
+	#[Test]
+	public function the_dashboard_month_covers_only_the_accountants_own_clients_and_leaves_no_client_in_scope(): void {
+		User::scopeConnectionToUser($this->firstAccountantId);
+
+		$monthOverview = (new DashboardService())->monthOverview($this->firstAccountantId, '');
+
+		$overviewClientIds = array_column($monthOverview['clients'], 'client_id');
+		sort($overviewClientIds);
+		$this->assertSame([$this->alphaClientId, $this->betaClientId], $overviewClientIds);
+		$this->assertSame([1, 1], array_column($monthOverview['clients'], 'active_employee_count'));
+
+		// The last Client read must not stay open on the connection.
+		$this->assertSame([], $this->distinctClientIdsIn('employees'));
+	}
+
+	#[Test]
+	public function bank_email_settings_are_kept_per_client(): void {
+		$bankPayrollEmailService = new BankPayrollEmailService();
+
+		$this->openBooks($this->firstAccountantId, $this->alphaClientId);
+		$errors = $bankPayrollEmailService->saveSettings($this->alphaClientId, $this->firstAccountantId, [
+			'bank_name'              => 'Alpha Bank',
+			'recipient_emails'       => [' payroll@alphabank.test ', 'PAYROLL@alphabank.test', '', 'ops@alphabank.test'],
+			'email_subject_template' => 'Payroll {pay_month}',
+			'email_body_template'    => 'Please pay {client_name}.',
+		]);
+		$this->assertSame([], $errors);
+		$this->assertSame([], PayrollRunBankEmail::listForRun(0, $this->alphaClientId));
+		$this->assertSame(
+			['payroll@alphabank.test', 'ops@alphabank.test'],
+			$bankPayrollEmailService->settingsForClient($this->alphaClientId)['recipient_emails']
+		);
+
+		$this->openBooks($this->firstAccountantId, $this->betaClientId);
+		$this->assertSame([], $this->distinctClientIdsIn('client_bank_email_settings'));
+		$this->assertSame([], $bankPayrollEmailService->settingsForClient($this->alphaClientId)['recipient_emails']);
+		$this->assertSame([], $bankPayrollEmailService->settingsForClient($this->betaClientId)['recipient_emails']);
+	}
+
+	#[Test]
+	public function bank_email_settings_with_a_bad_address_are_not_saved(): void {
+		$this->openBooks($this->firstAccountantId, $this->alphaClientId);
+
+		$errors = (new BankPayrollEmailService())->saveSettings($this->alphaClientId, $this->firstAccountantId, [
+			'recipient_emails'       => ['not-an-email'],
+			'email_subject_template' => '',
+			'email_body_template'    => 'Body',
+		]);
+
+		$this->assertSame(['recipient_emails', 'email_subject_template'], array_keys($errors));
+		$this->assertSame([], $this->distinctClientIdsIn('client_bank_email_settings'));
+	}
+
+	#[Test]
+	public function the_bank_file_lists_each_paid_employee_with_their_account_in_the_banks_layout(): void {
+		$this->openBooks($this->firstAccountantId, $this->alphaClientId);
+		$alphaEmployeeId = $this->employeeIdByClient[$this->alphaClientId];
+		$rateSet         = PayrollStatutoryRate::findInForceOn('2026-10-31');
+
+		$payrollRunId = PayrollRun::insertRun([
+			'client_id'              => $this->alphaClientId,
+			'pay_period'             => '2026-10-01',
+			'status'                 => 'finalised',
+			'statutory_rate_id'      => $rateSet['statutory_rate_id'],
+			'employee_ssnit_percent' => $rateSet['employee_ssnit_percent'],
+			'employer_ssnit_percent' => $rateSet['employer_ssnit_percent'],
+			'employee_count'         => 1,
+		]);
+		PayrollRun::insertLine([
+			'payroll_run_id' => $payrollRunId,
+			'client_id'      => $this->alphaClientId,
+			'employee_id'    => $alphaEmployeeId,
+			'employee_name'  => 'Cecilia Anto',
+			'allowance_mode' => 'flat',
+			'basic_salary'   => 1000, 'employee_ssnit' => 55, 'basic_less_ssnit' => 945, 'allowance' => 0,
+			'chargeable_income' => 945, 'paye' => 44.5, 'net_pay' => 900.5, 'employer_ssnit' => 130,
+		]);
+
+		$bankPaymentFileService = new BankPaymentFileService();
+		$this->assertSame(['Cecilia Anto'], $bankPaymentFileService->employeesMissingAccountDetails($payrollRunId, $this->alphaClientId));
+
+		Employee::updateEmployee($alphaEmployeeId, $this->alphaClientId, [
+			'bank_account_number' => '1151010036156',
+			'bank_name'           => 'GCB Bank',
+			'bank_branch'         => 'Dome',
+			'bank_sort_code'      => '040132',
+		]);
+		$this->assertSame([], $bankPaymentFileService->employeesMissingAccountDetails($payrollRunId, $this->alphaClientId));
+
+		$workbookPath = tempnam(sys_get_temp_dir(), 'bank-file-test');
+		file_put_contents($workbookPath, $bankPaymentFileService->xlsxContents($payrollRunId, $this->alphaClientId));
+		try {
+			$sheetRows = IOFactory::load($workbookPath)->getActiveSheet()->toArray(null, false, false);
+		} finally {
+			unlink($workbookPath);
+		}
+
+		$this->assertSame(
+			[
+				['Name', 'AccountNumber', 'BankName', 'BankBranch', 'SortCode', 'Amount'],
+				['CECILIA ANTO', '1151010036156', 'GCB BANK', 'DOME', '040132', 900.5],
+			],
+			$sheetRows
+		);
+
+		// Another Client's books see none of it.
+		$this->openBooks($this->firstAccountantId, $this->betaClientId);
+		$this->assertSame([], PayrollRun::getBankPaymentLines($payrollRunId, $this->alphaClientId));
 	}
 
 	// -------------------------------------------------------------------------

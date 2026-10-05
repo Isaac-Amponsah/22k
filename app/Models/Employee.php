@@ -21,13 +21,18 @@ final class Employee {
 		'hire_date',
 		'ssnit_number',
 		'tax_identification_number',
+		'bank_account_number',
+		'bank_name',
+		'bank_branch',
+		'bank_sort_code',
 		'is_active',
 	];
 
 	public static function listForClient(int $clientId): array {
 		return Database::fetchAll(
 			'SELECT employee_id, employee_code, first_name, last_name, job_title_name, department_name,
-			        hire_date, ssnit_number, tax_identification_number, is_active
+			        hire_date, ssnit_number, tax_identification_number,
+			        bank_account_number, bank_name, bank_branch, bank_sort_code, is_active
 			 FROM employees
 			 WHERE client_id = ?
 			 ORDER BY is_active DESC, first_name ASC, last_name ASC, employee_id ASC',
@@ -35,10 +40,19 @@ final class Employee {
 		);
 	}
 
+	public static function countActiveForClient(int $clientId): int {
+		$counted = Database::fetchOne(
+			'SELECT COUNT(*) AS active_employee_count FROM employees WHERE client_id = ? AND is_active',
+			[$clientId]
+		);
+		return (int) ($counted['active_employee_count'] ?? 0);
+	}
+
 	public static function findForClient(int $employeeId, int $clientId): ?array {
 		return Database::fetchOne(
 			'SELECT employee_id, employee_code, first_name, last_name, job_title_name, department_name,
-			        hire_date, ssnit_number, tax_identification_number, is_active
+			        hire_date, ssnit_number, tax_identification_number,
+			        bank_account_number, bank_name, bank_branch, bank_sort_code, is_active
 			 FROM employees
 			 WHERE employee_id = ? AND client_id = ?',
 			[$employeeId, $clientId]

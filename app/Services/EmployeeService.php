@@ -18,7 +18,14 @@ final class EmployeeService {
 		'department_name'           => 100,
 		'ssnit_number'              => 30,
 		'tax_identification_number' => 30,
+		'bank_account_number'       => 30,
+		'bank_name'                 => 100,
+		'bank_branch'               => 100,
+		'bank_sort_code'            => 10,
 	];
+
+	/** Bank identifiers are digits only; spaces and dashes typed for readability are dropped. */
+	private const DIGIT_ONLY_FIELDS = ['bank_account_number' => 'account number', 'bank_sort_code' => 'sort code'];
 
 	public function listEmployees(int $clientId): array {
 		return Employee::listForClient($clientId);
@@ -64,6 +71,12 @@ final class EmployeeService {
 
 		foreach (self::TEXT_FIELD_MAX_LENGTHS as $field => $maxLength) {
 			$value = trim((string) ($input[$field] ?? ''));
+			if (isset(self::DIGIT_ONLY_FIELDS[$field])) {
+				$value = str_replace([' ', '-'], '', $value);
+				if ($value !== '' && !ctype_digit($value)) {
+					$errors[$field] = 'Enter the ' . self::DIGIT_ONLY_FIELDS[$field] . ' in digits only.';
+				}
+			}
 			if (mb_strlen($value) > $maxLength) {
 				$errors[$field] = "Keep this to {$maxLength} characters.";
 			}

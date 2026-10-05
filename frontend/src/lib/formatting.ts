@@ -34,6 +34,13 @@ export function currentMonthInputValue(): string {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** ("2026-01", -1) → "2025-12". */
+export function shiftMonthInputValue(monthInputValue: string, monthsToShift: number): string {
+  const [year, month] = monthInputValue.split("-").map(Number);
+  const shifted = new Date(year, month - 1 + monthsToShift, 1);
+  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export function fullName(person: { first_name: string; last_name: string }): string {
   return `${person.first_name} ${person.last_name}`.trim();
 }

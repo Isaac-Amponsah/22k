@@ -30,6 +30,17 @@ final class RequestContext {
 		return (int) self::$signedInUser['user_id'];
 	}
 
+	/** The signed-in accountant's "First Last". */
+	public static function signedInUserName(): string {
+		self::signedInUserId();
+		return trim(self::$signedInUser['first_name'] . ' ' . self::$signedInUser['last_name']);
+	}
+
+	public static function signedInUserEmail(): string {
+		self::signedInUserId();
+		return (string) self::$signedInUser['email'];
+	}
+
 	/**
 	 * The Client this request is confined to. Refuses when the route was not Client-scoped, so a
 	 * controller can never run a Client query without one.

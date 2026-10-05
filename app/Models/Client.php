@@ -87,4 +87,11 @@ final class Client {
 	public static function scopeConnectionToClient(int $clientId): void {
 		Database::setConnectionSetting('app.client_id', (string) $clientId);
 	}
+
+	/**
+	 * Take the connection back out of any Client: the policies then show no Client's rows at all.
+	 */
+	public static function clearConnectionClientScope(): void {
+		Database::setConnectionSetting('app.client_id', '');
+	}
 }

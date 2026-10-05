@@ -30,6 +30,12 @@ final class Request {
 		return (string) ($_SERVER['HTTP_' . strtoupper(str_replace('-', '_', $headerName))] ?? '');
 	}
 
+	/** A value from the address's query string, or '' when it is absent or not a plain value. */
+	public function queryParameter(string $parameterName): string {
+		$value = $_GET[$parameterName] ?? '';
+		return is_string($value) ? $value : '';
+	}
+
 	public function ipAddress(): string {
 		return (string) ($_SERVER['REMOTE_ADDR'] ?? '');
 	}

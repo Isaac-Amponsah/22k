@@ -38,7 +38,7 @@ class PayrollExportService {
 	 */
 	public function streamXlsx(array $run, string $clientName): void {
 		$spreadsheet = $this->build($run, $clientName);
-		$filename    = 'Payroll-' . date('Y-m', strtotime((string) $run['pay_period'])) . '.xlsx';
+		$filename    = $this->xlsxFilename($run);
 
 		while (ob_get_level() > 0) {
 			ob_end_clean();
@@ -52,6 +52,11 @@ class PayrollExportService {
 		(new Xlsx($spreadsheet))->save('php://output');
 		$spreadsheet->disconnectWorksheets();
 		exit;
+	}
+
+	/** "Payroll-2026-10.xlsx" for the run's month. */
+	public function xlsxFilename(array $run): string {
+		return 'Payroll-' . date('Y-m', strtotime((string) $run['pay_period'])) . '.xlsx';
 	}
 
 	private function build(array $run, string $clientName): Spreadsheet {
