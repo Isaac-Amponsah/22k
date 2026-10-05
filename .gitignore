@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 !.env.environment.example
+secret.env.production
+prompt.md
 
 # Database seeds hold role passwords: only the template is tracked
 /database/seeds/*.sql
