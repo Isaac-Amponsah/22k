@@ -11,8 +11,7 @@ use App\Models\User;
  */
 final class AuthService {
 
-	/** Failed sign-ins allowed per email, and per address, inside the window. */
-	private const MAX_FAILURES_PER_EMAIL      = 5;
+	/** Failed sign-ins allowed per IP address inside the window. Per-email lockout is intentionally absent: it would let any attacker DoS a target account. */
 	private const MAX_FAILURES_PER_IP_ADDRESS = 20;
 	private const FAILURE_WINDOW_MINUTES      = 15;
 
@@ -30,10 +29,7 @@ final class AuthService {
 	public function attemptSignIn(string $email, string $password, string $ipAddress): array {
 		$email = trim($email);
 
-		if (
-			LoginAttempt::countRecentForEmail($email, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_EMAIL
-			|| LoginAttempt::countRecentForIpAddress($ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_IP_ADDRESS
-		) {
+		if (LoginAttempt::countRecentForIpAddress($ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_IP_ADDRESS) {
 			throw new \InvalidArgumentException(
 				'Too many failed sign-ins. Wait ' . self::FAILURE_WINDOW_MINUTES . ' minutes and try again.'
 			);
