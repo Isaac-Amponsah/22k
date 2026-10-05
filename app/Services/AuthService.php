@@ -11,9 +11,14 @@ use App\Models\User;
  */
 final class AuthService {
 
-	/** Failed sign-ins allowed per IP address inside the window. Per-email lockout is intentionally absent: it would let any attacker DoS a target account. */
-	private const MAX_FAILURES_PER_IP_ADDRESS = 20;
-	private const FAILURE_WINDOW_MINUTES      = 15;
+	/**
+	 * Per-email lockout uses the email+IP combination, not email alone. Email-only lockout lets any attacker DoS
+	 * a target by submitting failures from throwaway IPs; the combo check requires the attacker to control the
+	 * victim's IP, which is not a realistic threat model here.
+	 */
+	private const MAX_FAILURES_PER_EMAIL_AND_IP = 5;
+	private const MAX_FAILURES_PER_IP_ADDRESS   = 20;
+	private const FAILURE_WINDOW_MINUTES        = 15;
 
 	private const MIN_PASSWORD_LENGTH = 12;
 
@@ -29,7 +34,10 @@ final class AuthService {
 	public function attemptSignIn(string $email, string $password, string $ipAddress): array {
 		$email = trim($email);
 
-		if (LoginAttempt::countRecentForIpAddress($ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_IP_ADDRESS) {
+		if (
+			LoginAttempt::countRecentForEmailAndIpAddress($email, $ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_EMAIL_AND_IP
+			|| LoginAttempt::countRecentForIpAddress($ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_IP_ADDRESS
+		) {
 			throw new \InvalidArgumentException(
 				'Too many failed sign-ins. Wait ' . self::FAILURE_WINDOW_MINUTES . ' minutes and try again.'
 			);

@@ -26,6 +26,15 @@ final class LoginAttempt {
 		return (int) ($row['failure_count'] ?? 0);
 	}
 
+	public static function countRecentForEmailAndIpAddress(string $email, string $ipAddress, int $windowMinutes): int {
+		$row = Database::fetchOne(
+			"SELECT COUNT(*) AS failure_count FROM login_attempts
+			 WHERE email_lowercase = LOWER(?) AND ip_address = ? AND attempted_at > CURRENT_TIMESTAMP - (? * INTERVAL '1 minute')",
+			[$email, $ipAddress, $windowMinutes]
+		);
+		return (int) ($row['failure_count'] ?? 0);
+	}
+
 	public static function countRecentForIpAddress(string $ipAddress, int $windowMinutes): int {
 		$row = Database::fetchOne(
 			"SELECT COUNT(*) AS failure_count FROM login_attempts
