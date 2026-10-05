@@ -102,18 +102,18 @@ Workflows (`.github/workflows/`):
 
 | File | Runs on | Does |
 | --- | --- | --- |
-| `verify.yml` | push to `dev`, pull requests, and first in every deploy | PHP syntax, unit tests, migrations on an empty Postgres, client isolation tests (a skip fails), frontend build |
-| `deploy-staging.yml` | push to `staging` | calls `deploy.yml` with `environment: staging` |
-| `deploy-production.yml` | push to `main` | calls `deploy.yml` with `environment: production` |
-| `deploy.yml` | called by the two above | verify → rsync a new release → composer install → migrate → switch `current` → prune to 3 releases |
+| `verify.yml` | push to `dev`, pull requests | PHP syntax, unit tests, migrations on an empty Postgres, client isolation tests (a skip fails), frontend build |
+| `deploy-staging.yml` | push to `staging` (commented out) | one job: the `verify.yml` steps → rsync a new release → composer install → migrate → switch `current` → prune to 3 releases |
+| `deploy-production.yml` | push to `main` | same single job as staging, for production |
 
 Migrations run before the release goes live, so a failed migration or a failed isolation check leaves the previous release serving.
 
 ### One-time setup per environment
 
 1. **GitHub** → Settings → Environments → create `staging` and `production`, each with secrets `VPS_HOST`, `VPS_USER`, `VPS_PASSWORD`
-   (`VPS_PORT` if not 22) and variable `REMOTE_PATH` (the site directory, e.g. `/home/<site-user>/htdocs/<domain>`). Add required
-   reviewers to `production` to hold each production deploy for approval.
+   (`VPS_PORT` if not 22). The site directory is the `remote_path` input in `deploy-production.yml` / `deploy-staging.yml`
+   (production: `/home/aidingminds-22k/htdocs/22k.aidingminds.org`). Add required reviewers to `production` to hold each production
+   deploy for approval.
 2. **Env files on the VPS**, created by hand, never through git or CI:
    - `$REMOTE_PATH/shared/.env` — from `.env.example`, with `APP_ENV=staging` (or `production`). The deploy refuses to run if `APP_ENV`
      does not match the environment it is deploying.

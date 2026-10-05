@@ -3,13 +3,12 @@ name: Verify
 # The gate. Nothing is promoted or deployed unless the payroll arithmetic is right AND one client's
 # data provably cannot reach another's on a real Postgres.
 #   - dev deploys nowhere, but every push to it and every pull request runs this.
-#   - deploy.yml calls this first and ships the frontend build it produces.
+#   - deploy-production.yml and deploy-staging.yml carry these same steps inline: keep them in sync.
 
 on:
   push:
     branches: [dev]
   pull_request:
-  workflow_call:
 
 jobs:
   verify:
@@ -31,10 +30,10 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
         with:
           php-version: '8.3'
           extensions: pdo_pgsql, zip, gd, fileinfo, mbstring
@@ -48,7 +47,7 @@ jobs:
             | xargs -0 -n1 -P4 php -l > /dev/null
 
       - name: Install PHP dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer install --prefer-dist --no-interaction --no-progress --no-scripts --no-plugins
 
       - name: Run unit tests
         run: vendor/bin/phpunit --testsuite Unit --no-progress
@@ -104,7 +103,7 @@ jobs:
         run: vendor/bin/phpunit --testsuite Integration --no-progress --fail-on-skipped
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           cache: npm
@@ -113,14 +112,5 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
-
-      # A deploy ships exactly the build that passed here.
-      - name: Keep the built app for the deploy job
-        uses: actions/upload-artifact@v4
-        with:
-          name: spa
-          path: public/spa
-          if-no-files-found: error
-          retention-days: 1

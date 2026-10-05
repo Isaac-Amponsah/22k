@@ -5,7 +5,8 @@
  *
  * Connects as the database owner (DB_ADMIN_USERNAME), never as the application role. The roles and
  * the database come from the environment's seed (database/seeds/roles.<environment>.sql, kept out
- * of git). Applies each file in database/migrations/ once, in name order, then checks the isolation guarantees and fails loudly if any is missing:
+ * of git). Applies each file in database/migrations/ once, in name order, recording each in migration_log, then
+ * checks the isolation guarantees and fails loudly if any is missing:
  *   - the application role is not a superuser and cannot bypass row-level security;
  *   - every table with a client_id column has row-level security enabled, forced, and a policy.
  * A migration that adds a Client's table without its policy therefore does not pass.
@@ -63,13 +64,21 @@ if (!$canCreateTables) {
 	exit(1);
 }
 
+// migration_log records every applied file. The runner creates it, not a migration file, because it is read before the
+// first migration runs. A database migrated before the rename keeps its history: schema_migrations becomes migration_log.
+$hasLegacyMigrationTable = $ownerConnection->query(
+	"SELECT to_regclass('public.schema_migrations') IS NOT NULL AND to_regclass('public.migration_log') IS NULL"
+)->fetchColumn();
+if ($hasLegacyMigrationTable) {
+	$ownerConnection->exec('ALTER TABLE schema_migrations RENAME TO migration_log');
+}
 $ownerConnection->exec(
-	'CREATE TABLE IF NOT EXISTS schema_migrations (
+	'CREATE TABLE IF NOT EXISTS migration_log (
 		migration_name VARCHAR(190) PRIMARY KEY,
 		applied_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	)'
 );
-$appliedMigrations = $ownerConnection->query('SELECT migration_name FROM schema_migrations')->fetchAll(PDO::FETCH_COLUMN);
+$appliedMigrations = $ownerConnection->query('SELECT migration_name FROM migration_log')->fetchAll(PDO::FETCH_COLUMN);
 
 $migrationFiles = glob(__DIR__ . '/migrations/*.sql') ?: [];
 sort($migrationFiles);
@@ -84,7 +93,7 @@ foreach ($migrationFiles as $migrationFile) {
 	$ownerConnection->beginTransaction();
 	try {
 		$ownerConnection->exec($migrationSql);
-		$ownerConnection->prepare('INSERT INTO schema_migrations (migration_name) VALUES (?)')->execute([$migrationName]);
+		$ownerConnection->prepare('INSERT INTO migration_log (migration_name) VALUES (?)')->execute([$migrationName]);
 		$ownerConnection->commit();
 	} catch (Throwable $migrationError) {
 		$ownerConnection->rollBack();

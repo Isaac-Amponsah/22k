@@ -1,5 +1,5 @@
-# Vhost template for one environment. Replace <domain> and <site-dir> (the REMOTE_PATH variable of
-# that GitHub environment), e.g. /home/payroll-staging/htdocs/staging.payroll.example.com.
+# Vhost template for one environment. Replace <domain> and <site-dir> (the remote_path input of
+# that environment's deploy workflow), e.g. /home/payroll-staging/htdocs/staging.payroll.example.com.
 # The {{…}} placeholders are filled in by the hosting panel, as on the other sites of this VPS.
 # The app binds no port of its own: PHP-FPM serves /api, nginx serves the built single-page app.
 

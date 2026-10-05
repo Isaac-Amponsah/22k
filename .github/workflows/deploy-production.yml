@@ -1,7 +1,21 @@
 name: Deploy Production
 
-# A push to main (a merge from staging) verifies and deploys to the production site.
+# A push to main (a merge from staging) verifies and deploys to the production site in one job: one runner, one checkout,
+# and the deploy ships exactly the build the tests just passed. Nothing reaches the VPS unless the payroll arithmetic is
+# right AND one client's data provably cannot reach another's on a real Postgres.
 # Add required reviewers to the production environment in GitHub to hold each deploy for approval.
+#
+# GitHub environment "production" (Settings → Environments → production):
+#   secrets    VPS_HOST, VPS_USER, VPS_PASSWORD, VPS_PORT (optional, default 22)
+# VPS secrets are scoped to the steps that talk to the VPS, but every step shares this runner, so code run by an earlier
+# step could tamper with a later one. Hence: actions pinned to commit SHAs, dependency install scripts and plugins off,
+# and the VPS host key recorded before any third-party code runs.
+#
+# Layout on the VPS (the vhost's web root is $REMOTE_PATH/current/public):
+#   $REMOTE_PATH/shared/.env                 base settings; APP_ENV must equal production
+#   $REMOTE_PATH/shared/.env.production      production's database and credentials
+#   $REMOTE_PATH/releases/<timestamp>/       one directory per deploy, pruned to KEEP_RELEASES
+#   $REMOTE_PATH/current                     symlink to the live release, switched last
 
 on:
   push:
@@ -15,7 +29,208 @@ concurrency:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy.yml
-    with:
-      environment: production
-    secrets: inherit
+    name: Verify and deploy to production
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      TARGET_ENVIRONMENT: production
+      REMOTE_PATH: /home/aidingminds-22k/htdocs/22k.aidingminds.org
+      KEEP_RELEASES: 3
+
+    # Throwaway database on the GitHub runner (not the VPS). Lives for this job only.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci-superuser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      # Fails fast, before any test minutes are spent, when a VPS secret is missing.
+      - name: Check the environment is configured
+        env: &vps_env
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          for required in SSHPASS VPS_HOST VPS_USER; do
+            if [ -z "${!required}" ]; then
+              echo "ERROR: a VPS secret is missing for the $TARGET_ENVIRONMENT environment (VPS_HOST, VPS_USER, VPS_PASSWORD)." >&2
+              exit 1
+            fi
+          done
+          echo "SSH_PORT=${VPS_PORT:-22}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+
+      - name: Install sshpass + rsync
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass rsync
+
+      - name: Add VPS to known_hosts
+        env: *vps_env
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$SSH_PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # ─── Verify ──────────────────────────────────────────────────────────────────────────────────────────────
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, zip, gd, fileinfo, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Syntax check
+        run: |
+          set -e
+          find app/ public/ config/ database/ bin/ tests/ -name "*.php" -print0 \
+            | xargs -0 -n1 -P4 php -l > /dev/null
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress --no-scripts --no-plugins
+
+      - name: Run unit tests
+        run: vendor/bin/phpunit --testsuite Unit --no-progress
+
+      # Seeded from the same template a real environment's seed is copied from (the real seeds hold
+      # passwords and are not in git): an owner for migrations and an application role that owns
+      # nothing and cannot bypass row-level security. Role names start with a digit on purpose: SQL
+      # takes such names only quoted, and the seed and migrations must cope. APP_ENV is local because
+      # the integration tests refuse to run anywhere else. The .env files written here are outside the
+      # rsync allow-list, so they never reach the VPS.
+      - name: Prepare the throwaway database
+        env:
+          PGPASSWORD: ci-superuser
+        run: |
+          set -e
+          sed -e 's/<environment>/local/g' \
+              -e 's/<owner_role>/22k_owner/g' -e 's/<owner_password>/ci-owner/g' \
+              -e 's/<application_role>/22k_app/g' -e 's/<application_password>/ci-app/g' \
+              -e 's/<database>/payroll_ci/g' \
+              database/seeds/roles.example.sql > "$RUNNER_TEMP/roles.ci.sql"
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/roles.ci.sql"
+          printf 'APP_NAME=Payroll\nAPP_ENV=local\nAPP_TIMEZONE=Africa/Accra\n' > .env
+          {
+            echo 'DB_HOST=127.0.0.1'
+            echo 'DB_PORT=5432'
+            echo 'DB_DATABASE=payroll_ci'
+            echo 'DB_USERNAME=22k_app'
+            echo 'DB_PASSWORD=ci-app'
+            echo 'DB_ADMIN_USERNAME=22k_owner'
+            echo 'DB_ADMIN_PASSWORD=ci-owner'
+          } > .env.local
+
+      # Also proves every migration applies to an empty database, and runs migrate.php's own
+      # isolation checks (application role attributes, forced row-level security on every client table).
+      - name: Run migrations
+        run: php database/migrate.php
+
+      # The admin seed template, run the way a real one is: after the migrations, as the owner role.
+      # Twice, because running it again must update the account, not fail.
+      - name: Run the admin seed template
+        env:
+          PGPASSWORD: ci-owner
+        run: |
+          set -e
+          sed -e 's/<environment>/local/g' -e 's/<admin_email>/admin@ci.test/g' \
+              -e 's/<admin_password>/ci-admin-password/g' \
+              -e 's/<admin_first_name>/Ci/g' -e 's/<admin_last_name>/Admin/g' \
+              database/seeds/admin.example.sql > "$RUNNER_TEMP/admin.ci.sql"
+          psql -h 127.0.0.1 -U 22k_owner -d payroll_ci -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/admin.ci.sql"
+          psql -h 127.0.0.1 -U 22k_owner -d payroll_ci -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/admin.ci.sql"
+
+      # A skipped isolation test is a gate that did not close: fail on skips.
+      - name: Run client isolation tests
+        run: vendor/bin/phpunit --testsuite Integration --no-progress --fail-on-skipped
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Builds into public/spa, which the rsync allow-list ships.
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      # ─── Deploy ──────────────────────────────────────────────────────────────────────────────────────────────
+
+      # The env files are created once by hand on the VPS and never travel through git or CI.
+      # APP_ENV must name the environment being deployed: a production site whose .env says
+      # staging would run on the staging database, so the deploy stops here instead.
+      - name: Prepare release directory and check env files on VPS
+        env: *vps_env
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "mkdir -p $REMOTE_PATH/releases/$RELEASE_NAME $REMOTE_PATH/shared && \
+             test -f $REMOTE_PATH/shared/.env || { echo 'ERROR: $REMOTE_PATH/shared/.env is missing — create it once on the VPS before the first deploy.' >&2; exit 1; } && \
+             test -f $REMOTE_PATH/shared/.env.$TARGET_ENVIRONMENT || { echo 'ERROR: $REMOTE_PATH/shared/.env.$TARGET_ENVIRONMENT is missing — create it once on the VPS before the first deploy.' >&2; exit 1; } && \
+             grep -qE '^APP_ENV=$TARGET_ENVIRONMENT[[:space:]]*\$' $REMOTE_PATH/shared/.env || { echo 'ERROR: APP_ENV in $REMOTE_PATH/shared/.env is not $TARGET_ENVIRONMENT.' >&2; exit 1; }"
+
+      # Allow-list: only what the running app needs. Tests, the frontend source, docs, vendor/ and
+      # the CI .env files are not named here and never reach the server.
+      - name: Rsync release to VPS
+        env: *vps_env
+        run: |
+          sshpass -e rsync -avz --delete \
+            --no-owner --no-group \
+            --omit-dir-times \
+            --chmod=Du=rwx,Dg=rwx,Do=rx,Fu=rw,Fg=rw,Fo=r \
+            --include='/app/***' \
+            --include='/config/***' \
+            --include='/public/***' \
+            --include='/database/' \
+            --include='/database/migrate.php' \
+            --include='/database/migrations/***' \
+            --include='/bin/***' \
+            --include='/composer.json' \
+            --include='/composer.lock' \
+            --exclude='*' \
+            -e "ssh -p $SSH_PORT -o StrictHostKeyChecking=yes" \
+            ./ "$VPS_USER@$VPS_HOST:$REMOTE_PATH/releases/$RELEASE_NAME/"
+
+      - name: Link env files into release
+        env: *vps_env
+        run: |
+          RELEASE_PATH="$REMOTE_PATH/releases/$RELEASE_NAME"
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "ln -sf $REMOTE_PATH/shared/.env $RELEASE_PATH/.env && \
+             ln -sf $REMOTE_PATH/shared/.env.$TARGET_ENVIRONMENT $RELEASE_PATH/.env.$TARGET_ENVIRONMENT"
+
+      - name: Composer install on VPS
+        env: *vps_env
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "cd $REMOTE_PATH/releases/$RELEASE_NAME && composer install --no-dev --optimize-autoloader --no-interaction --no-progress"
+
+      # Runs before the release is activated, so a failed migration — or a failed isolation
+      # check at the end of migrate.php — leaves $REMOTE_PATH/current on the previous release.
+      - name: Run database migrations on VPS
+        env: *vps_env
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "cd $REMOTE_PATH/releases/$RELEASE_NAME && php database/migrate.php"
+
+      - name: Activate release and prune old ones
+        env: *vps_env
+        run: |
+          sshpass -e ssh -p "$SSH_PORT" -o StrictHostKeyChecking=yes "$VPS_USER@$VPS_HOST" \
+            "ln -sfn $REMOTE_PATH/releases/$RELEASE_NAME $REMOTE_PATH/current && \
+             cd $REMOTE_PATH/releases && ls -1dt */ | tail -n +$((KEEP_RELEASES + 1)) | xargs -r rm -rf"
