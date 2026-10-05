@@ -12,13 +12,17 @@ use App\Models\User;
 final class AuthService {
 
 	/**
-	 * Per-email lockout uses the email+IP combination, not email alone. Email-only lockout lets any attacker DoS
-	 * a target by submitting failures from throwaway IPs; the combo check requires the attacker to control the
-	 * victim's IP, which is not a realistic threat model here.
+	 * Three independent rate-limit axes:
+	 *   email+IP   — blocks single-IP brute force against one account (hard lockout at 5)
+	 *   IP         — blocks one IP spraying many accounts (hard lockout at 20)
+	 *   email only — catches distributed attacks from many IPs; threshold is high enough (30) that
+	 *                legitimate users will never reach it, but low enough to cap a coordinated attempt.
+	 *                Email-only at a low threshold would be a DoS vector; 30 requires a real attack.
 	 */
-	private const MAX_FAILURES_PER_EMAIL_AND_IP = 5;
-	private const MAX_FAILURES_PER_IP_ADDRESS   = 20;
-	private const FAILURE_WINDOW_MINUTES        = 15;
+	private const MAX_FAILURES_PER_EMAIL_AND_IP    = 5;
+	private const MAX_FAILURES_PER_IP_ADDRESS      = 20;
+	private const MAX_FAILURES_PER_EMAIL_GLOBAL    = 30;
+	private const FAILURE_WINDOW_MINUTES           = 15;
 
 	private const MIN_PASSWORD_LENGTH = 12;
 
@@ -37,6 +41,7 @@ final class AuthService {
 		if (
 			LoginAttempt::countRecentForEmailAndIpAddress($email, $ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_EMAIL_AND_IP
 			|| LoginAttempt::countRecentForIpAddress($ipAddress, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_IP_ADDRESS
+			|| LoginAttempt::countRecentForEmail($email, self::FAILURE_WINDOW_MINUTES) >= self::MAX_FAILURES_PER_EMAIL_GLOBAL
 		) {
 			throw new \InvalidArgumentException(
 				'Too many failed sign-ins. Wait ' . self::FAILURE_WINDOW_MINUTES . ' minutes and try again.'
