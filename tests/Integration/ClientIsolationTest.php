@@ -32,10 +32,8 @@ use PHPUnit\Framework\TestCase;
 final class ClientIsolationTest extends TestCase {
 
 	private const SALARY = [
-		'basic_salary'             => 1000.00,
-		'allowance_mode'           => 'flat',
-		'flat_allowance'           => 0.0,
-		'target_chargeable_income' => null,
+		'basic_salary'   => 1000.00,
+		'flat_allowance' => 0.0,
 	];
 
 	private bool $transactionOpened = false;
@@ -250,7 +248,6 @@ final class ClientIsolationTest extends TestCase {
 			'client_id'      => $this->alphaClientId,
 			'employee_id'    => $alphaEmployeeId,
 			'employee_name'  => 'Cecilia Anto',
-			'allowance_mode' => 'flat',
 			'basic_salary'   => 1000, 'employee_ssnit' => 55, 'basic_less_ssnit' => 945, 'allowance' => 0,
 			'chargeable_income' => 945, 'paye' => 44.5, 'net_pay' => 900.5, 'employer_ssnit' => 130,
 		]);

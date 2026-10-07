@@ -35,8 +35,6 @@ export interface Employee {
   is_active: boolean;
 }
 
-export type AllowanceMode = "flat" | "target";
-
 export interface TaxBand {
   band_order: number;
   band_width: string | null;
@@ -71,9 +69,7 @@ export interface SalariedEmployee {
   job_title_name: string | null;
   employee_salary_id: number | null;
   basic_salary: string | null;
-  allowance_mode: AllowanceMode | null;
   flat_allowance: string | null;
-  target_chargeable_income: string | null;
   pay: PayFigures | null;
   pay_error?: string;
 }
@@ -191,8 +187,5 @@ export interface ImportedSalaryRow {
   basic_salary: number;
   allowance: number;
   chargeable_income: number | null;
-  allowance_mode: AllowanceMode;
-  flat_allowance: number;
-  target_chargeable_income: number | null;
   matched_employee_id: number | null;
 }

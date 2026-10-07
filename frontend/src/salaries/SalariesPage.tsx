@@ -1,5 +1,5 @@
-// Salaries: one form for every active employee of the client whose books are open. Each row shows the
-// amount field its allowance type uses and works its pay out again as the figures are typed.
+// Salaries: one form for every active employee of the client whose books are open. Each row works its
+// pay out again as the figures are typed.
 
 import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
@@ -9,20 +9,22 @@ import { useClientInScope } from "../clients/ClientWorkspace";
 import { api, errorMessage, fieldErrorsOf } from "../lib/apiClient";
 import { formatMoney, formatPercent, fullName } from "../lib/formatting";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
-import { previewSalary } from "../lib/salaryPreview";
+import { allowanceForTakeHome, basicSalaryForTakeHome, previewSalary, readAmount } from "../lib/salaryPreview";
+import type { TakeHomeDerivation } from "../lib/salaryPreview";
 import { Button, EmptyState, INPUT_CLASSES, LoadingState, Notice, PageHeading, Panel } from "../shared/ui";
-import type { AllowanceMode, RateSet, SalariedEmployee } from "../types";
+import type { RateSet, SalariedEmployee } from "../types";
 
 interface SalaryListAnswer {
   employees: SalariedEmployee[];
   rate_set: RateSet | null;
 }
 
+/** Derived: take home follows basic salary and allowance. Fixed: they follow the take home typed. */
+type TakeHomeMode = "derived" | "fixed";
+
 interface SalaryRowInput {
   basic_salary: string;
-  allowance_mode: AllowanceMode;
   flat_allowance: string;
-  target_chargeable_income: string;
 }
 
 /** "4000.00" → "4000.00"; null → "". */
@@ -33,9 +35,7 @@ function amountInputValue(storedAmount: string | null): string {
 function rowInputOf(employee: SalariedEmployee): SalaryRowInput {
   return {
     basic_salary: amountInputValue(employee.basic_salary),
-    allowance_mode: employee.allowance_mode ?? "flat",
     flat_allowance: amountInputValue(employee.flat_allowance),
-    target_chargeable_income: amountInputValue(employee.target_chargeable_income),
   };
 }
 
@@ -82,6 +82,10 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
   const [rowInputs, setRowInputs] = useState<Record<number, SalaryRowInput>>(() =>
     Object.fromEntries(employees.map((employee) => [employee.employee_id, rowInputOf(employee)])),
   );
+  // How each row is entered, and the take home a fixed row holds to. Kept on this page only, never saved.
+  const [takeHomeModes, setTakeHomeModes] = useState<Record<number, TakeHomeMode>>({});
+  const [fixedTakeHomes, setFixedTakeHomes] = useState<Record<number, string>>({});
+  const [derivationErrors, setDerivationErrors] = useState<Record<number, string | null>>({});
   const [successMessage, setSuccessMessage] = useState("");
 
   const saveMutation = useMutation({
@@ -100,15 +104,69 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
     setRowInputs((currentInputs) => ({ ...currentInputs, [employeeId]: { ...currentInputs[employeeId], ...changedInput } }));
   }
 
-  /** The typed figure stays as it is; what it means changes with the type, so the worked-out columns move. */
-  function changeAllowanceMode(employeeId: number, allowanceMode: AllowanceMode) {
-    const currentInput = rowInputs[employeeId];
-    changeRow(
-      employeeId,
-      allowanceMode === "target"
-        ? { allowance_mode: allowanceMode, target_chargeable_income: currentInput.flat_allowance }
-        : { allowance_mode: allowanceMode, flat_allowance: currentInput.target_chargeable_income },
+  function isFixedTakeHome(employeeId: number): boolean {
+    return takeHomeModes[employeeId] === "fixed";
+  }
+
+  /**
+   * Applies a derivation to one figure of a row: the derived amount on success, the refusal otherwise
+   * (the figure is then left as it was). A blank take home derives nothing.
+   */
+  function applyDerivation(
+    employeeId: number,
+    takeHomeInput: string,
+    derivedField: keyof SalaryRowInput,
+    derive: (rateSetInForce: RateSet) => TakeHomeDerivation,
+  ) {
+    if (rateSet === null || takeHomeInput.trim() === "") {
+      setDerivationErrors((currentErrors) => ({ ...currentErrors, [employeeId]: null }));
+      return;
+    }
+    const derivation = derive(rateSet);
+    if (derivation.amount !== null) {
+      changeRow(employeeId, { [derivedField]: derivation.amount.toFixed(2) });
+    }
+    setDerivationErrors((currentErrors) => ({ ...currentErrors, [employeeId]: derivation.error }));
+  }
+
+  function changeBasicSalary(employeeId: number, typedBasicSalary: string) {
+    changeRow(employeeId, { basic_salary: typedBasicSalary });
+    // A blank basic salary means the row is not saved at all, so there is no allowance to work out.
+    if (isFixedTakeHome(employeeId) && typedBasicSalary.trim() !== "") {
+      const fixedTakeHome = fixedTakeHomes[employeeId] ?? "";
+      applyDerivation(employeeId, fixedTakeHome, "flat_allowance", (rateSetInForce) =>
+        allowanceForTakeHome(fixedTakeHome, typedBasicSalary, rateSetInForce),
+      );
+    }
+  }
+
+  function changeAllowance(employeeId: number, typedAllowance: string) {
+    changeRow(employeeId, { flat_allowance: typedAllowance });
+    if (isFixedTakeHome(employeeId)) {
+      const fixedTakeHome = fixedTakeHomes[employeeId] ?? "";
+      applyDerivation(employeeId, fixedTakeHome, "basic_salary", (rateSetInForce) =>
+        basicSalaryForTakeHome(fixedTakeHome, typedAllowance, rateSetInForce),
+      );
+    }
+  }
+
+  function changeFixedTakeHome(employeeId: number, typedTakeHome: string) {
+    setFixedTakeHomes((currentTakeHomes) => ({ ...currentTakeHomes, [employeeId]: typedTakeHome }));
+    applyDerivation(employeeId, typedTakeHome, "basic_salary", (rateSetInForce) =>
+      basicSalaryForTakeHome(typedTakeHome, rowInputs[employeeId].flat_allowance, rateSetInForce),
     );
+  }
+
+  /** A row turning fixed holds to the take home it shows now. */
+  function changeTakeHomeMode(employeeId: number, takeHomeMode: TakeHomeMode, currentNetPay: number | null) {
+    setTakeHomeModes((currentModes) => ({ ...currentModes, [employeeId]: takeHomeMode }));
+    setDerivationErrors((currentErrors) => ({ ...currentErrors, [employeeId]: null }));
+    if (takeHomeMode === "fixed") {
+      setFixedTakeHomes((currentTakeHomes) => ({
+        ...currentTakeHomes,
+        [employeeId]: currentNetPay === null ? "" : currentNetPay.toFixed(2),
+      }));
+    }
   }
 
   function handleSubmit(submitEvent: FormEvent) {
@@ -158,36 +216,37 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
                 <tr>
                   <th className="px-4 py-3 font-medium">Employee</th>
                   <th className="px-2 py-3 font-medium">Basic salary (GHS)</th>
-                  <th className="px-2 py-3 font-medium">Allowance type</th>
-                  <th className="px-2 py-3 font-medium">Allowance or target (GHS)</th>
-                  <th className="figure px-3 py-3 font-medium">Allowance</th>
+                  <th className="px-2 py-3 font-medium">Allowance (GHS)</th>
+                  <th className="figure px-3 py-3 font-medium">Gross</th>
+                  <th className="figure px-3 py-3 font-medium">
+                    Employee SSNIT{rateSet ? ` ${formatPercent(rateSet.employee_ssnit_percent)}%` : ""}
+                  </th>
                   <th className="figure px-3 py-3 font-medium">Chargeable</th>
                   <th className="figure px-3 py-3 font-medium">PAYE</th>
-                  <th className="figure px-4 py-3 font-medium">Take home</th>
+                  <th className="px-2 py-3 font-medium">Take home</th>
+                  <th className="px-4 py-3 font-medium">Take home (GHS)</th>
                 </tr>
               </thead>
               <tbody>
                 {employees.map((employee) => {
                   const rowInput = rowInputs[employee.employee_id];
-                  const isTargetMode = rowInput.allowance_mode === "target";
-                  const preview = rateSet
-                    ? previewSalary(
-                        rowInput.basic_salary,
-                        rowInput.allowance_mode,
-                        rowInput.flat_allowance,
-                        rowInput.target_chargeable_income,
-                        rateSet,
-                      )
-                    : null;
+                  const preview = rateSet ? previewSalary(rowInput.basic_salary, rowInput.flat_allowance, rateSet) : null;
                   const fieldPrefix = `salaries[${employee.employee_id}]`;
                   const rowError =
                     serverFieldErrors[`${fieldPrefix}[basic_salary]`] ??
-                    serverFieldErrors[`${fieldPrefix}[allowance_mode]`] ??
                     serverFieldErrors[`${fieldPrefix}[flat_allowance]`] ??
-                    serverFieldErrors[`${fieldPrefix}[target_chargeable_income]`] ??
                     preview?.error ??
                     null;
                   const figures = preview?.figures ?? null;
+                  const isFixed = isFixedTakeHome(employee.employee_id);
+                  const fixedTakeHome = fixedTakeHomes[employee.employee_id] ?? "";
+                  const fixedTakeHomeAmount = readAmount(fixedTakeHome);
+                  const takeHomeError = !isFixed
+                    ? null
+                    : (derivationErrors[employee.employee_id] ??
+                      (figures !== null && fixedTakeHomeAmount !== null && figures.net_pay !== fixedTakeHomeAmount
+                        ? `Closest take home possible is ${formatMoney(figures.net_pay)}.`
+                        : null));
 
                   return (
                     <tr key={employee.employee_id} className="border-b border-rule/60 align-top last:border-0">
@@ -205,20 +264,8 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
                           className={`${INPUT_CLASSES} w-32`}
                           disabled={!canEdit}
                           value={rowInput.basic_salary}
-                          onChange={(changeEvent) => changeRow(employee.employee_id, { basic_salary: changeEvent.target.value })}
+                          onChange={(changeEvent) => changeBasicSalary(employee.employee_id, changeEvent.target.value)}
                         />
-                      </td>
-                      <td className="px-2 py-2">
-                        <select
-                          aria-label={`Allowance type for ${fullName(employee)}`}
-                          className={`${INPUT_CLASSES} w-56`}
-                          disabled={!canEdit}
-                          value={rowInput.allowance_mode}
-                          onChange={(changeEvent) => changeAllowanceMode(employee.employee_id, changeEvent.target.value as AllowanceMode)}
-                        >
-                          <option value="flat">Flat amount</option>
-                          <option value="target">Top up to chargeable income of</option>
-                        </select>
                       </td>
                       <td className="px-2 py-2">
                         <input
@@ -226,25 +273,52 @@ function SalariesForm({ salaryList }: { salaryList: SalaryListAnswer }) {
                           min="0"
                           step="0.01"
                           inputMode="decimal"
-                          aria-label={`${isTargetMode ? "Target chargeable income" : "Flat allowance"} for ${fullName(employee)}`}
+                          aria-label={`Allowance for ${fullName(employee)}`}
                           className={`${INPUT_CLASSES} w-32`}
                           disabled={!canEdit}
-                          value={isTargetMode ? rowInput.target_chargeable_income : rowInput.flat_allowance}
-                          onChange={(changeEvent) =>
-                            changeRow(
-                              employee.employee_id,
-                              isTargetMode
-                                ? { target_chargeable_income: changeEvent.target.value }
-                                : { flat_allowance: changeEvent.target.value },
-                            )
-                          }
+                          value={rowInput.flat_allowance}
+                          onChange={(changeEvent) => changeAllowance(employee.employee_id, changeEvent.target.value)}
                         />
                         {rowError ? <p className="mt-1 max-w-56 text-sm text-refusal">{rowError}</p> : null}
                       </td>
-                      <td className="figure px-3 py-3">{formatMoney(figures?.allowance)}</td>
+                      <td className="figure px-3 py-3">{formatMoney(figures?.gross_pay)}</td>
+                      <td className="figure px-3 py-3">{formatMoney(figures?.employee_ssnit)}</td>
                       <td className="figure px-3 py-3">{formatMoney(figures?.chargeable_income)}</td>
                       <td className="figure px-3 py-3">{formatMoney(figures?.paye)}</td>
-                      <td className="figure px-4 py-3 font-semibold">{formatMoney(figures?.net_pay)}</td>
+                      <td className="px-2 py-2">
+                        <select
+                          aria-label={`Take home entry for ${fullName(employee)}`}
+                          className={`${INPUT_CLASSES} w-28`}
+                          disabled={!canEdit}
+                          value={isFixed ? "fixed" : "derived"}
+                          onChange={(changeEvent) =>
+                            changeTakeHomeMode(employee.employee_id, changeEvent.target.value as TakeHomeMode, figures?.net_pay ?? null)
+                          }
+                        >
+                          <option value="derived">Derived</option>
+                          <option value="fixed">Fixed</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-2">
+                        {isFixed ? (
+                          <>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              inputMode="decimal"
+                              aria-label={`Fixed take home for ${fullName(employee)}`}
+                              className={`${INPUT_CLASSES} w-32 font-semibold`}
+                              disabled={!canEdit}
+                              value={fixedTakeHome}
+                              onChange={(changeEvent) => changeFixedTakeHome(employee.employee_id, changeEvent.target.value)}
+                            />
+                            {takeHomeError ? <p className="mt-1 max-w-56 text-sm text-refusal">{takeHomeError}</p> : null}
+                          </>
+                        ) : (
+                          <span className="figure block py-1 font-semibold">{formatMoney(figures?.net_pay)}</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

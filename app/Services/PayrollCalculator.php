@@ -8,7 +8,7 @@ namespace App\Services;
  *
  *   SSNIT             = basic salary x employee SSNIT %
  *   basic less SSNIT  = basic salary - SSNIT
- *   allowance         = the flat amount, or (target chargeable income - basic less SSNIT)
+ *   allowance         = the flat amount
  *   chargeable income = basic less SSNIT + allowance
  *   PAYE              = chargeable income run through the monthly bands
  *   take home         = chargeable income - PAYE
@@ -19,11 +19,6 @@ namespace App\Services;
  */
 final class PayrollCalculator {
 
-	public const MODE_FLAT   = 'flat';
-	public const MODE_TARGET = 'target';
-
-	public const ALLOWANCE_MODES = [self::MODE_FLAT, self::MODE_TARGET];
-
 	/**
 	 * Work out one employee's pay.
 	 *
@@ -31,45 +26,21 @@ final class PayrollCalculator {
 	 *                       (ordered rows of band_width — null for the last, open band — and rate_percent).
 	 * @return array{basic_salary: float, employee_ssnit: float, basic_less_ssnit: float, allowance: float,
 	 *               chargeable_income: float, paye: float, net_pay: float, employer_ssnit: float}
-	 * @throws \InvalidArgumentException When the mode is unknown, an amount is negative, or a target
-	 *                                   is below basic less SSNIT (the allowance would be negative).
+	 * @throws \InvalidArgumentException When an amount is negative.
 	 */
-	public static function compute(
-		float $basicSalary,
-		string $allowanceMode,
-		float $flatAllowance,
-		?float $targetChargeableIncome,
-		array $rateSet
-	): array {
-		if (!in_array($allowanceMode, self::ALLOWANCE_MODES, true)) {
-			throw new \InvalidArgumentException('Unknown allowance type.');
-		}
+	public static function compute(float $basicSalary, float $flatAllowance, array $rateSet): array {
 		if ($basicSalary < 0) {
 			throw new \InvalidArgumentException('Basic salary cannot be negative.');
+		}
+		if ($flatAllowance < 0) {
+			throw new \InvalidArgumentException('Allowance cannot be negative.');
 		}
 
 		$basicPesewas          = self::toPesewas($basicSalary);
 		$employeeSsnitPesewas  = self::percentOf($basicPesewas, (float) $rateSet['employee_ssnit_percent']);
 		$employerSsnitPesewas  = self::percentOf($basicPesewas, (float) $rateSet['employer_ssnit_percent']);
 		$basicLessSsnitPesewas = $basicPesewas - $employeeSsnitPesewas;
-
-		if ($allowanceMode === self::MODE_TARGET) {
-			if ($targetChargeableIncome === null) {
-				throw new \InvalidArgumentException('Enter the target chargeable income.');
-			}
-			$allowancePesewas = self::toPesewas($targetChargeableIncome) - $basicLessSsnitPesewas;
-			if ($allowancePesewas < 0) {
-				throw new \InvalidArgumentException(
-					'Target chargeable income cannot be below basic salary less SSNIT ('
-					. number_format($basicLessSsnitPesewas / 100, 2) . ').'
-				);
-			}
-		} else {
-			if ($flatAllowance < 0) {
-				throw new \InvalidArgumentException('Allowance cannot be negative.');
-			}
-			$allowancePesewas = self::toPesewas($flatAllowance);
-		}
+		$allowancePesewas      = self::toPesewas($flatAllowance);
 
 		$chargeablePesewas = $basicLessSsnitPesewas + $allowancePesewas;
 		$payePesewas       = self::payePesewas($chargeablePesewas, $rateSet['bands'] ?? []);

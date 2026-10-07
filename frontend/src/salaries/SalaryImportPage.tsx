@@ -10,7 +10,7 @@ import { api, errorMessage } from "../lib/apiClient";
 import { formatMoney, fullName } from "../lib/formatting";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
 import { Button, ConfirmDialog, INPUT_CLASSES, Notice, PageHeading, Panel } from "../shared/ui";
-import type { AllowanceMode, ImportedSalaryRow, SalariedEmployee } from "../types";
+import type { ImportedSalaryRow, SalariedEmployee } from "../types";
 
 interface ParsedSheet {
   rows: ImportedSalaryRow[];
@@ -21,7 +21,6 @@ interface ParsedSheet {
 interface RowChoice {
   isIncluded: boolean;
   employeeChoice: string;
-  allowanceMode: AllowanceMode;
 }
 
 const ADD_AS_NEW_EMPLOYEE = "new";
@@ -47,7 +46,6 @@ export function SalaryImportPage() {
         sheet.rows.map((row) => ({
           isIncluded: row.matched_employee_id !== null,
           employeeChoice: row.matched_employee_id === null ? "" : String(row.matched_employee_id),
-          allowanceMode: row.allowance_mode,
         })),
       );
     },
@@ -63,9 +61,7 @@ export function SalaryImportPage() {
           employee_name: row.employee_name,
           employee_id: choice.employeeChoice,
           basic_salary: row.basic_salary,
-          allowance_mode: choice.allowanceMode,
-          flat_allowance: row.flat_allowance,
-          target_chargeable_income: row.target_chargeable_income,
+          flat_allowance: row.allowance,
         }));
       return api.post(clientApiPath(client.client_id, "salaries/import/confirm"), { rows: chosenRows });
     },
@@ -151,9 +147,7 @@ export function SalaryImportPage() {
                     <th className="px-2 py-3 font-medium">Name on sheet</th>
                     <th className="px-2 py-3 font-medium">Employee</th>
                     <th className="figure px-3 py-3 font-medium">Basic salary</th>
-                    <th className="px-2 py-3 font-medium">Allowance</th>
-                    <th className="figure px-3 py-3 font-medium">Flat amount</th>
-                    <th className="figure px-4 py-3 font-medium">Target chargeable</th>
+                    <th className="figure px-4 py-3 font-medium">Allowance</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -191,21 +185,7 @@ export function SalaryImportPage() {
                           </select>
                         </td>
                         <td className="figure px-3 py-2">{formatMoney(row.basic_salary)}</td>
-                        <td className="px-2 py-2">
-                          <select
-                            aria-label={`Allowance type for row ${row.sheet_row}`}
-                            className={`${INPUT_CLASSES} w-44`}
-                            value={choice.allowanceMode}
-                            onChange={(changeEvent) => changeChoice(rowIndex, { allowanceMode: changeEvent.target.value as AllowanceMode })}
-                          >
-                            <option value="flat">Flat amount</option>
-                            <option value="target" disabled={row.target_chargeable_income === null}>
-                              Top up to target
-                            </option>
-                          </select>
-                        </td>
-                        <td className="figure px-3 py-2">{formatMoney(row.flat_allowance)}</td>
-                        <td className="figure px-4 py-2">{formatMoney(row.target_chargeable_income)}</td>
+                        <td className="figure px-4 py-2">{formatMoney(row.allowance)}</td>
                       </tr>
                     );
                   })}

@@ -55,7 +55,7 @@ final class PayrollService {
 			try {
 				$employees[$employeeIndex]['pay'] = $this->computePay($employee, $rateSet);
 			} catch (\InvalidArgumentException $e) {
-				// A target that the current SSNIT rate has overtaken: shown as "needs attention".
+				// A stored figure the calculator refuses: shown as "needs attention".
 				$employees[$employeeIndex]['pay_error'] = $e->getMessage();
 			}
 		}
@@ -67,7 +67,7 @@ final class PayrollService {
 	 * Save the salaries posted from the Salaries page. All or nothing: one bad row saves none.
 	 * A row whose basic salary is left blank is skipped (that employee has no salary yet).
 	 *
-	 * @param array $postedSalaries [employee_id => [basic_salary, allowance_mode, flat_allowance, target_chargeable_income]]
+	 * @param array $postedSalaries [employee_id => [basic_salary, flat_allowance]]
 	 * @return array{saved: int, errors: array<string, string>} errors keyed by the form field name.
 	 */
 	public function saveSalaries(int $clientId, ?int $userId, array $postedSalaries): array {
@@ -122,8 +122,8 @@ final class PayrollService {
 	/**
 	 * Check one salary as typed or imported, and shape it for storage.
 	 *
-	 * @param array $input   basic_salary, allowance_mode, flat_allowance, target_chargeable_income
-	 * @param array $rateSet Rates the target is checked against.
+	 * @param array $input   basic_salary, flat_allowance
+	 * @param array $rateSet Rates the salary is worked out against.
 	 * @return array{salary: ?array, field: ?string, error: ?string}
 	 */
 	public function validateSalaryInput(array $input, array $rateSet): array {
@@ -134,41 +134,22 @@ final class PayrollService {
 			return $fail('basic_salary', 'Enter a basic salary of 0 or more.');
 		}
 
-		$allowanceMode = (string) ($input['allowance_mode'] ?? PayrollCalculator::MODE_FLAT);
-		if (!in_array($allowanceMode, PayrollCalculator::ALLOWANCE_MODES, true)) {
-			return $fail('allowance_mode', 'Choose how the allowance is worked out.');
-		}
-
-		$flatAllowance          = 0.0;
-		$targetChargeableIncome = null;
-		if ($allowanceMode === PayrollCalculator::MODE_TARGET) {
-			$targetChargeableIncome = $this->parseAmount($input['target_chargeable_income'] ?? null);
-			if ($targetChargeableIncome === null) {
-				return $fail('target_chargeable_income', 'Enter the target chargeable income.');
-			}
-		} else {
-			$flatAllowanceInput = trim((string) ($input['flat_allowance'] ?? ''));
-			$flatAllowance      = $flatAllowanceInput === '' ? 0.0 : $this->parseAmount($flatAllowanceInput);
-			if ($flatAllowance === null) {
-				return $fail('flat_allowance', 'Enter an allowance of 0 or more.');
-			}
+		$flatAllowanceInput = trim((string) ($input['flat_allowance'] ?? ''));
+		$flatAllowance      = $flatAllowanceInput === '' ? 0.0 : $this->parseAmount($flatAllowanceInput);
+		if ($flatAllowance === null) {
+			return $fail('flat_allowance', 'Enter an allowance of 0 or more.');
 		}
 
 		try {
-			PayrollCalculator::compute($basicSalary, $allowanceMode, $flatAllowance, $targetChargeableIncome, $rateSet);
+			PayrollCalculator::compute($basicSalary, $flatAllowance, $rateSet);
 		} catch (\InvalidArgumentException $e) {
-			return $fail(
-				$allowanceMode === PayrollCalculator::MODE_TARGET ? 'target_chargeable_income' : 'flat_allowance',
-				$e->getMessage()
-			);
+			return $fail('flat_allowance', $e->getMessage());
 		}
 
 		return [
 			'salary' => [
-				'basic_salary'             => $basicSalary,
-				'allowance_mode'           => $allowanceMode,
-				'flat_allowance'           => $flatAllowance,
-				'target_chargeable_income' => $targetChargeableIncome,
+				'basic_salary'   => $basicSalary,
+				'flat_allowance' => $flatAllowance,
 			],
 			'field' => null,
 			'error' => null,
@@ -391,13 +372,7 @@ final class PayrollService {
 	}
 
 	private function computePay(array $salary, array $rateSet): array {
-		return PayrollCalculator::compute(
-			(float) $salary['basic_salary'],
-			(string) $salary['allowance_mode'],
-			(float) $salary['flat_allowance'],
-			$salary['target_chargeable_income'] === null ? null : (float) $salary['target_chargeable_income'],
-			$rateSet
-		);
+		return PayrollCalculator::compute((float) $salary['basic_salary'], (float) $salary['flat_allowance'], $rateSet);
 	}
 
 	/**
@@ -431,7 +406,6 @@ final class PayrollService {
 				'employee_code'   => $employee['employee_code'],
 				'job_title_name'  => $employee['job_title_name'],
 				'department_name' => $employee['department_name'],
-				'allowance_mode'  => $employee['allowance_mode'],
 			] + $pay;
 		}
 

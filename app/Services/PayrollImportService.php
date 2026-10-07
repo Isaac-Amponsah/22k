@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Helpers\Database;
 use App\Models\Employee;
 use App\Models\EmployeeSalary;
-use PhpOffice\PhpSpreadsheet\Cell\Cell;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
@@ -16,8 +15,8 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  * Reads salaries from a payroll workbook laid out like the accountant's own sheet and applies them.
  *
  * The sheet has a two-row heading (BASIC / SALARY, ALLOWANCE, CHARGEABLE / INCOME, …) and one row
- * per employee. Columns are found by their headings, not their letters. An allowance typed as
- * "=1000-E6" is a top-up to a target chargeable income of 1000; anything else is a flat amount.
+ * per employee. Columns are found by their headings, not their letters. The allowance is taken as
+ * the flat amount the cell shows, whether typed or worked out by a formula.
  *
  * Nothing is saved on upload: the parsed rows go back to the browser for review, each matched to an
  * employee by name, and are saved only on confirm.
@@ -47,9 +46,6 @@ final class PayrollImportService {
 	/** Preview option: create the employee from the sheet's name instead of matching one. */
 	public const CREATE_EMPLOYEE = 'new';
 
-	/** "=1000-E6", "= 1,400.50 - E8": the allowance tops chargeable income up to the leading number. */
-	private const TARGET_FORMULA = '/^=\s*([\d,]+(?:\.\d+)?)\s*-\s*\$?[A-Z]{1,3}\$?\d+\s*$/i';
-
 	private PayrollService $payrollService;
 
 	public function __construct() {
@@ -59,8 +55,7 @@ final class PayrollImportService {
 	/**
 	 * Parse the first sheet of a workbook into salary rows.
 	 *
-	 * @return array Rows of: sheet_row, employee_name, basic_salary, allowance, chargeable_income,
-	 *               allowance_mode ('flat' | 'target'), flat_allowance, target_chargeable_income.
+	 * @return array Rows of: sheet_row, employee_name, basic_salary, allowance, chargeable_income.
 	 * @throws \InvalidArgumentException When the sheet is not in the payroll layout.
 	 */
 	public function parseWorkbook(string $workbookPath): array {
@@ -88,24 +83,17 @@ final class PayrollImportService {
 				continue;
 			}
 
-			$allowanceCell    = $sheet->getCell([$columns['allowance'], $sheetRow]);
 			$allowance        = round((float) $this->cellValue($sheet, $columns['allowance'], $sheetRow), 2);
 			$chargeableIncome = $columns['chargeable'] === null
 				? null
 				: round((float) $this->cellValue($sheet, $columns['chargeable'], $sheetRow), 2);
 
-			$targetFromFormula = $this->targetFromFormula($allowanceCell);
-
 			$rows[] = [
-				'sheet_row'                => $sheetRow,
-				'employee_name'            => preg_replace('/\s+/', ' ', $employeeName),
-				'basic_salary'             => round((float) $basicSalary, 2),
-				'allowance'                => $allowance,
-				'chargeable_income'        => $chargeableIncome,
-				'allowance_mode'           => $targetFromFormula === null ? PayrollCalculator::MODE_FLAT : PayrollCalculator::MODE_TARGET,
-				'flat_allowance'           => $allowance,
-				// Offered in the preview even for a flat row, so the mode can be switched there.
-				'target_chargeable_income' => $targetFromFormula ?? $chargeableIncome,
+				'sheet_row'         => $sheetRow,
+				'employee_name'     => preg_replace('/\s+/', ' ', $employeeName),
+				'basic_salary'      => round((float) $basicSalary, 2),
+				'allowance'         => $allowance,
+				'chargeable_income' => $chargeableIncome,
 			];
 		}
 
@@ -151,7 +139,7 @@ final class PayrollImportService {
 	 * Client. All or nothing.
 	 *
 	 * @param array $chosenRows Rows of: sheet_row, employee_name, employee_id (an id, or 'new'),
-	 *                          basic_salary, allowance_mode, flat_allowance, target_chargeable_income.
+	 *                          basic_salary, flat_allowance.
 	 * @return array{saved: int, created: int, errors: string[]}
 	 */
 	public function applyRows(int $clientId, ?int $userId, array $chosenRows): array {
@@ -352,14 +340,6 @@ final class PayrollImportService {
 				return $row <= $this->maxRows && Coordinate::columnIndexFromString($columnAddress) <= $this->maxColumns;
 			}
 		};
-	}
-
-	/** The target chargeable income when the allowance is typed as "=target - cell", else null. */
-	private function targetFromFormula(Cell $allowanceCell): ?float {
-		if (!$allowanceCell->isFormula() || !preg_match(self::TARGET_FORMULA, (string) $allowanceCell->getValue(), $formulaParts)) {
-			return null;
-		}
-		return round((float) str_replace(',', '', $formulaParts[1]), 2);
 	}
 
 	private function normaliseName(string $name): string {
