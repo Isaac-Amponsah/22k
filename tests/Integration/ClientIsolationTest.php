@@ -8,7 +8,9 @@ use App\Helpers\Database;
 use App\Helpers\Env;
 use App\Models\Client;
 use App\Models\Employee;
+use App\Models\EmployeePayItemAmount;
 use App\Models\EmployeeSalary;
+use App\Models\EmployeeTaxRelief;
 use App\Models\PayrollRun;
 use App\Models\PayrollRunBankEmail;
 use App\Models\PayrollStatutoryRate;
@@ -16,6 +18,8 @@ use App\Models\User;
 use App\Services\BankPaymentFileService;
 use App\Services\BankPayrollEmailService;
 use App\Services\DashboardService;
+use App\Services\PayItemService;
+use App\Services\PayrollService;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -32,10 +36,8 @@ use PHPUnit\Framework\TestCase;
 final class ClientIsolationTest extends TestCase {
 
 	private const SALARY = [
-		'basic_salary'             => 1000.00,
-		'allowance_mode'           => 'flat',
-		'flat_allowance'           => 0.0,
-		'target_chargeable_income' => null,
+		'basic_salary'  => 1000.00,
+		'tier3_percent' => 0.0,
 	];
 
 	private bool $transactionOpened = false;
@@ -243,6 +245,7 @@ final class ClientIsolationTest extends TestCase {
 			'statutory_rate_id'      => $rateSet['statutory_rate_id'],
 			'employee_ssnit_percent' => $rateSet['employee_ssnit_percent'],
 			'employer_ssnit_percent' => $rateSet['employer_ssnit_percent'],
+			'ssnit_tier1_percent'    => $rateSet['ssnit_tier1_percent'],
 			'employee_count'         => 1,
 		]);
 		PayrollRun::insertLine([
@@ -250,9 +253,9 @@ final class ClientIsolationTest extends TestCase {
 			'client_id'      => $this->alphaClientId,
 			'employee_id'    => $alphaEmployeeId,
 			'employee_name'  => 'Cecilia Anto',
-			'allowance_mode' => 'flat',
 			'basic_salary'   => 1000, 'employee_ssnit' => 55, 'basic_less_ssnit' => 945, 'allowance' => 0,
 			'chargeable_income' => 945, 'paye' => 44.5, 'net_pay' => 900.5, 'employer_ssnit' => 130,
+			'taxable_allowance' => 0, 'ssnit_tier1' => 135, 'ssnit_tier2' => 50,
 		]);
 
 		$bankPaymentFileService = new BankPaymentFileService();
@@ -285,6 +288,80 @@ final class ClientIsolationTest extends TestCase {
 		// Another Client's books see none of it.
 		$this->openBooks($this->firstAccountantId, $this->betaClientId);
 		$this->assertSame([], PayrollRun::getBankPaymentLines($payrollRunId, $this->alphaClientId));
+	}
+
+	#[Test]
+	public function pay_items_amounts_and_reliefs_stay_with_their_client(): void {
+		$this->openBooks($this->firstAccountantId, $this->alphaClientId);
+		$alphaEmployeeId = $this->employeeIdByClient[$this->alphaClientId];
+
+		$created = (new PayItemService())->createPayItem($this->alphaClientId, [
+			'item_kind' => 'allowance', 'item_name' => 'Motivational allowance', 'is_taxable' => true,
+		]);
+		$this->assertSame([], $created['errors']);
+		$alphaPayItemId = (int) $created['pay_item']['pay_item_id'];
+		EmployeePayItemAmount::replaceForEmployee($this->alphaClientId, $alphaEmployeeId, [$alphaPayItemId => 250.00]);
+		EmployeeTaxRelief::replaceForEmployee($this->alphaClientId, $alphaEmployeeId, ['marriage_responsibility' => 1]);
+
+		$this->openBooks($this->firstAccountantId, $this->betaClientId);
+		$betaEmployeeId = $this->employeeIdByClient[$this->betaClientId];
+		foreach (['client_pay_items', 'employee_pay_item_amounts', 'employee_tax_reliefs'] as $clientTable) {
+			$this->assertSame([], $this->distinctClientIdsIn($clientTable), "{$clientTable} must show Beta nothing of Alpha's.");
+		}
+
+		// Beta's employee cannot be given an amount on Alpha's allowance.
+		$this->assertDatabaseRefuses(function () use ($betaEmployeeId, $alphaPayItemId): void {
+			EmployeePayItemAmount::replaceForEmployee($this->betaClientId, $betaEmployeeId, [$alphaPayItemId => 100.00]);
+		});
+	}
+
+	#[Test]
+	public function the_salary_list_works_pay_out_from_the_clients_allowances_deductions_tier_3_and_reliefs(): void {
+		$this->openBooks($this->firstAccountantId, $this->alphaClientId);
+		$alphaEmployeeId = $this->employeeIdByClient[$this->alphaClientId];
+		$payItemService  = new PayItemService();
+		$payrollService  = new PayrollService();
+
+		$educationId = (int) $payItemService->createPayItem($this->alphaClientId, [
+			'item_kind' => 'allowance', 'item_name' => 'Education allowance', 'is_taxable' => false,
+		])['pay_item']['pay_item_id'];
+		$loanId = (int) $payItemService->createPayItem($this->alphaClientId, [
+			'item_kind' => 'deduction', 'item_name' => 'Staff loan',
+		])['pay_item']['pay_item_id'];
+
+		$payItems  = $payItemService->listPayItems($this->alphaClientId);
+		$validated = $payrollService->validateSalaryInput([
+			'basic_salary'  => '2000.00',
+			'tier3_percent' => '5',
+			'pay_items'     => [$educationId => '300', $loanId => '100'],
+			'reliefs'       => ['marriage_responsibility' => '1'],
+		], $payItems, $payrollService->rateSetInForce(date('Y-m-01')));
+		$this->assertNull($validated['error']);
+
+		EmployeeSalary::upsertForEmployee($this->alphaClientId, $alphaEmployeeId, $validated['salary'], $this->firstAccountantId);
+		EmployeePayItemAmount::replaceForEmployee($this->alphaClientId, $alphaEmployeeId, $validated['pay_item_amounts']);
+		EmployeeTaxRelief::replaceForEmployee($this->alphaClientId, $alphaEmployeeId, $validated['relief_claims']);
+
+		$pay = $payrollService->salaryList($this->alphaClientId)['employees'][0]['pay'];
+
+		$this->assertSame(300.00, $pay['allowance']);
+		$this->assertSame(0.00, $pay['taxable_allowance']);
+		$this->assertSame(100.00, $pay['tier3_contribution']);
+		$this->assertSame(100.00, $pay['personal_relief']);
+		$this->assertSame(1690.00, $pay['chargeable_income']);
+		$this->assertSame(100.00, $pay['other_deductions']);
+		$this->assertSame(
+			[['allowance', 'Education allowance', false, 300.0], ['relief', 'Marriage / responsibility', null, 100.0], ['deduction', 'Staff loan', null, 100.0]],
+			array_map(static fn(array $item): array => [$item['item_kind'], $item['item_name'], $item['is_taxable'], $item['amount']], $pay['items'])
+		);
+
+		// Another client's allowance is refused, and so is a pay item someone still holds an amount on.
+		$this->assertSame(
+			"pay_items][999999999",
+			$payrollService->validateSalaryInput(['basic_salary' => '1', 'pay_items' => [999999999 => '5']], $payItems, $payrollService->rateSetInForce(date('Y-m-01')))['field']
+		);
+		$this->expectException(\InvalidArgumentException::class);
+		$payItemService->deletePayItem($loanId, $this->alphaClientId);
 	}
 
 	// -------------------------------------------------------------------------

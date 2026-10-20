@@ -3,9 +3,10 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Models\ClientPayItem;
 use App\Models\Employee;
+use App\Models\EmployeePayItemAmount;
 use App\Models\EmployeeSalary;
-use PhpOffice\PhpSpreadsheet\Cell\Cell;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
@@ -16,8 +17,8 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  * Reads salaries from a payroll workbook laid out like the accountant's own sheet and applies them.
  *
  * The sheet has a two-row heading (BASIC / SALARY, ALLOWANCE, CHARGEABLE / INCOME, …) and one row
- * per employee. Columns are found by their headings, not their letters. An allowance typed as
- * "=1000-E6" is a top-up to a target chargeable income of 1000; anything else is a flat amount.
+ * per employee. Columns are found by their headings, not their letters. The allowance is taken as
+ * the amount the cell shows, whether typed or worked out by a formula.
  *
  * Nothing is saved on upload: the parsed rows go back to the browser for review, each matched to an
  * employee by name, and are saved only on confirm.
@@ -47,8 +48,10 @@ final class PayrollImportService {
 	/** Preview option: create the employee from the sheet's name instead of matching one. */
 	public const CREATE_EMPLOYEE = 'new';
 
-	/** "=1000-E6", "= 1,400.50 - E8": the allowance tops chargeable income up to the leading number. */
-	private const TARGET_FORMULA = '/^=\s*([\d,]+(?:\.\d+)?)\s*-\s*\$?[A-Z]{1,3}\$?\d+\s*$/i';
+	/** The taxable allowance a Client with none gets for the sheet's ALLOWANCE column. */
+	private const NEW_ALLOWANCE_NAME          = 'Allowance';
+	private const NEW_ALLOWANCE_FALLBACK_NAME = 'Taxable allowance';
+	private const NEW_ALLOWANCE_ITEM_ID       = 0;
 
 	private PayrollService $payrollService;
 
@@ -59,8 +62,7 @@ final class PayrollImportService {
 	/**
 	 * Parse the first sheet of a workbook into salary rows.
 	 *
-	 * @return array Rows of: sheet_row, employee_name, basic_salary, allowance, chargeable_income,
-	 *               allowance_mode ('flat' | 'target'), flat_allowance, target_chargeable_income.
+	 * @return array Rows of: sheet_row, employee_name, basic_salary, allowance, chargeable_income.
 	 * @throws \InvalidArgumentException When the sheet is not in the payroll layout.
 	 */
 	public function parseWorkbook(string $workbookPath): array {
@@ -88,24 +90,17 @@ final class PayrollImportService {
 				continue;
 			}
 
-			$allowanceCell    = $sheet->getCell([$columns['allowance'], $sheetRow]);
 			$allowance        = round((float) $this->cellValue($sheet, $columns['allowance'], $sheetRow), 2);
 			$chargeableIncome = $columns['chargeable'] === null
 				? null
 				: round((float) $this->cellValue($sheet, $columns['chargeable'], $sheetRow), 2);
 
-			$targetFromFormula = $this->targetFromFormula($allowanceCell);
-
 			$rows[] = [
-				'sheet_row'                => $sheetRow,
-				'employee_name'            => preg_replace('/\s+/', ' ', $employeeName),
-				'basic_salary'             => round((float) $basicSalary, 2),
-				'allowance'                => $allowance,
-				'chargeable_income'        => $chargeableIncome,
-				'allowance_mode'           => $targetFromFormula === null ? PayrollCalculator::MODE_FLAT : PayrollCalculator::MODE_TARGET,
-				'flat_allowance'           => $allowance,
-				// Offered in the preview even for a flat row, so the mode can be switched there.
-				'target_chargeable_income' => $targetFromFormula ?? $chargeableIncome,
+				'sheet_row'         => $sheetRow,
+				'employee_name'     => preg_replace('/\s+/', ' ', $employeeName),
+				'basic_salary'      => round((float) $basicSalary, 2),
+				'allowance'         => $allowance,
+				'chargeable_income' => $chargeableIncome,
 			];
 		}
 
@@ -147,11 +142,15 @@ final class PayrollImportService {
 
 	/**
 	 * Save the rows chosen in the preview. Every figure is checked again here exactly as a salary
-	 * typed on the Salaries page is; the employee each row names must be an active employee of this
-	 * Client. All or nothing.
+	 * typed on the Salaries page is, together with what else the employee already has (Tier 3, other
+	 * allowances, deductions, reliefs), which the import leaves as it is. The employee each row names
+	 * must be an active employee of this Client. All or nothing.
+	 *
+	 * The sheet's one ALLOWANCE column goes to the Client's first taxable allowance; a Client with none
+	 * gets an "Allowance" item for it.
 	 *
 	 * @param array $chosenRows Rows of: sheet_row, employee_name, employee_id (an id, or 'new'),
-	 *                          basic_salary, allowance_mode, flat_allowance, target_chargeable_income.
+	 *                          basic_salary, allowance.
 	 * @return array{saved: int, created: int, errors: string[]}
 	 */
 	public function applyRows(int $clientId, ?int $userId, array $chosenRows): array {
@@ -163,13 +162,26 @@ final class PayrollImportService {
 			return ['saved' => 0, 'created' => 0, 'errors' => ['Too many rows for one import.']];
 		}
 
-		$activeEmployeeIds = array_map(
-			static fn(array $employee): int => (int) $employee['employee_id'],
-			EmployeeSalary::listActiveForClient($clientId)
-		);
+		$tier3PercentByEmployee = [];
+		foreach (EmployeeSalary::listActiveForClient($clientId) as $employee) {
+			$tier3PercentByEmployee[(int) $employee['employee_id']] = (float) ($employee['tier3_percent'] ?? 0);
+		}
+		$storedInputs    = $this->payrollService->storedPayInputsByEmployee($clientId);
+		$payItems        = ClientPayItem::listForClient($clientId);
+		$importAllowance = ClientPayItem::firstTaxableAllowanceForClient($clientId);
+		// Until it is created on save, the allowance a Client without one gets is checked as item 0.
+		$importAllowanceId = $importAllowance === null ? self::NEW_ALLOWANCE_ITEM_ID : (int) $importAllowance['pay_item_id'];
+		if ($importAllowance === null) {
+			$payItems[] = [
+				'pay_item_id' => self::NEW_ALLOWANCE_ITEM_ID,
+				'item_kind'   => ClientPayItem::KIND_ALLOWANCE,
+				'item_name'   => self::NEW_ALLOWANCE_NAME,
+				'is_taxable'  => true,
+			];
+		}
 
 		$errors          = [];
-		$salaryByRow     = [];
+		$importedByRow   = [];
 		$employeeByRow   = [];
 		$newNameByRow    = [];
 		$chosenEmployees = [];
@@ -189,7 +201,7 @@ final class PayrollImportService {
 					continue;
 				}
 				$newNameByRow[$rowIndex] = $newName;
-			} elseif (!in_array((int) $chosenEmployee, $activeEmployeeIds, true)) {
+			} elseif (!isset($tier3PercentByEmployee[(int) $chosenEmployee])) {
 				$errors[] = "{$rowLabel}: choose the employee this row belongs to.";
 				continue;
 			} elseif (isset($chosenEmployees[(int) $chosenEmployee])) {
@@ -199,27 +211,47 @@ final class PayrollImportService {
 				$chosenEmployees[(int) $chosenEmployee] = true;
 			}
 
-			$validated = $this->payrollService->validateSalaryInput($chosenRow, $rateSet);
+			$existingEmployeeId = $chosenEmployee === self::CREATE_EMPLOYEE ? 0 : (int) $chosenEmployee;
+			$validated          = $this->payrollService->validateSalaryInput([
+				'basic_salary'  => $chosenRow['basic_salary'] ?? null,
+				'tier3_percent' => $tier3PercentByEmployee[$existingEmployeeId] ?? 0,
+				'pay_items'     => [$importAllowanceId => $chosenRow['allowance'] ?? ''] + ($storedInputs['amounts'][$existingEmployeeId] ?? []),
+				'reliefs'       => $storedInputs['reliefs'][$existingEmployeeId] ?? [],
+			], $payItems, $rateSet);
 			if ($validated['error'] !== null) {
 				$errors[] = "{$rowLabel}: {$validated['error']}";
 				continue;
 			}
 
-			$salaryByRow[$rowIndex]   = $validated['salary'];
+			$importedByRow[$rowIndex] = [
+				'basic_salary' => $validated['salary']['basic_salary'],
+				'allowance'    => $validated['pay_item_amounts'][$importAllowanceId] ?? 0.0,
+			];
 			$employeeByRow[$rowIndex] = $chosenEmployee;
 		}
 
 		if ($errors !== []) {
 			return ['saved' => 0, 'created' => 0, 'errors' => $errors];
 		}
-		if ($salaryByRow === []) {
+		if ($importedByRow === []) {
 			return ['saved' => 0, 'created' => 0, 'errors' => ['No rows were selected for import.']];
 		}
 
 		$createdCount = 0;
 		Database::beginTransaction();
 		try {
-			foreach ($salaryByRow as $rowIndex => $salary) {
+			if ($importAllowance === null) {
+				$importAllowanceId = ClientPayItem::insertPayItem($clientId, [
+					'item_kind'     => ClientPayItem::KIND_ALLOWANCE,
+					'item_name'     => ClientPayItem::nameTaken($clientId, ClientPayItem::KIND_ALLOWANCE, self::NEW_ALLOWANCE_NAME)
+						? self::NEW_ALLOWANCE_FALLBACK_NAME
+						: self::NEW_ALLOWANCE_NAME,
+					'is_taxable'    => true,
+					'display_order' => ClientPayItem::nextDisplayOrder($clientId, ClientPayItem::KIND_ALLOWANCE),
+				]);
+			}
+
+			foreach ($importedByRow as $rowIndex => $imported) {
 				$employeeId = $employeeByRow[$rowIndex];
 				if ($employeeId === self::CREATE_EMPLOYEE) {
 					[$firstName, $lastName] = $newNameByRow[$rowIndex];
@@ -230,7 +262,8 @@ final class PayrollImportService {
 					], $userId);
 					$createdCount++;
 				}
-				EmployeeSalary::upsertForEmployee($clientId, (int) $employeeId, $salary, $userId);
+				EmployeeSalary::upsertBasicSalaryForEmployee($clientId, (int) $employeeId, $imported['basic_salary'], $userId);
+				EmployeePayItemAmount::setForEmployee($clientId, (int) $employeeId, $importAllowanceId, $imported['allowance']);
 			}
 			Database::commit();
 		} catch (\Throwable $e) {
@@ -238,7 +271,7 @@ final class PayrollImportService {
 			throw $e;
 		}
 
-		return ['saved' => count($salaryByRow), 'created' => $createdCount, 'errors' => []];
+		return ['saved' => count($importedByRow), 'created' => $createdCount, 'errors' => []];
 	}
 
 	// -------------------------------------------------------------------------
@@ -352,14 +385,6 @@ final class PayrollImportService {
 				return $row <= $this->maxRows && Coordinate::columnIndexFromString($columnAddress) <= $this->maxColumns;
 			}
 		};
-	}
-
-	/** The target chargeable income when the allowance is typed as "=target - cell", else null. */
-	private function targetFromFormula(Cell $allowanceCell): ?float {
-		if (!$allowanceCell->isFormula() || !preg_match(self::TARGET_FORMULA, (string) $allowanceCell->getValue(), $formulaParts)) {
-			return null;
-		}
-		return round((float) str_replace(',', '', $formulaParts[1]), 2);
 	}
 
 	private function normaliseName(string $name): string {

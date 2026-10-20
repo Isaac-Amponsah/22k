@@ -10,7 +10,7 @@ use App\Services\PayrollRateService;
 
 /**
  * Payroll Rate Controller
- * SSNIT percentages and PAYE bands, effective-dated and shared by every Client.
+ * SSNIT percentages, PAYE bands and personal relief amounts, effective-dated and shared by every Client.
  */
 final class PayrollRateController {
 
@@ -22,7 +22,10 @@ final class PayrollRateController {
 
 	/** GET /api/payroll-rates */
 	public function index(Request $request): void {
-		JsonResponse::success(['rate_sets' => $this->rateService->listRateSets()]);
+		JsonResponse::success([
+			'rate_sets'    => $this->rateService->listRateSets(),
+			'relief_types' => $this->rateService->listReliefTypes(),
+		]);
 	}
 
 	/** POST /api/payroll-rates */

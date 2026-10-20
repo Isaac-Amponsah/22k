@@ -25,6 +25,7 @@ final class Employee {
 		'bank_name',
 		'bank_branch',
 		'bank_sort_code',
+		'email_address',
 		'is_active',
 	];
 
@@ -32,7 +33,7 @@ final class Employee {
 		return Database::fetchAll(
 			'SELECT employee_id, employee_code, first_name, last_name, job_title_name, department_name,
 			        hire_date, ssnit_number, tax_identification_number,
-			        bank_account_number, bank_name, bank_branch, bank_sort_code, is_active
+			        bank_account_number, bank_name, bank_branch, bank_sort_code, email_address, is_active
 			 FROM employees
 			 WHERE client_id = ?
 			 ORDER BY is_active DESC, first_name ASC, last_name ASC, employee_id ASC',
@@ -52,7 +53,7 @@ final class Employee {
 		return Database::fetchOne(
 			'SELECT employee_id, employee_code, first_name, last_name, job_title_name, department_name,
 			        hire_date, ssnit_number, tax_identification_number,
-			        bank_account_number, bank_name, bank_branch, bank_sort_code, is_active
+			        bank_account_number, bank_name, bank_branch, bank_sort_code, email_address, is_active
 			 FROM employees
 			 WHERE employee_id = ? AND client_id = ?',
 			[$employeeId, $clientId]

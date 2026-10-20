@@ -7,6 +7,7 @@ import { useClientInScope } from "../clients/ClientWorkspace";
 import { api, errorMessage, fieldErrorsOf } from "../lib/apiClient";
 import { formatDate, fullName } from "../lib/formatting";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
+import { ActionsMenu } from "../shared/ActionsMenu";
 import { Button, Dialog, EmptyState, LoadingState, Notice, PageHeading, Panel, TextField } from "../shared/ui";
 import type { Employee } from "../types";
 
@@ -23,6 +24,7 @@ interface EmployeeFormValues {
   bank_name: string;
   bank_branch: string;
   bank_sort_code: string;
+  email_address: string;
   is_active: boolean;
 }
 
@@ -40,6 +42,7 @@ function formValuesOf(employee: Employee | null): EmployeeFormValues {
     bank_name: employee?.bank_name ?? "",
     bank_branch: employee?.bank_branch ?? "",
     bank_sort_code: employee?.bank_sort_code ?? "",
+    email_address: employee?.email_address ?? "",
     is_active: employee?.is_active ?? true,
   };
 }
@@ -89,6 +92,7 @@ export function EmployeesPage() {
                   <th className="px-4 py-3 font-medium">Job title</th>
                   <th className="px-4 py-3 font-medium">Department</th>
                   <th className="px-4 py-3 font-medium">Hired</th>
+                  <th className="px-4 py-3 font-medium">Email</th>
                   <th className="px-4 py-3 font-medium">SSNIT number</th>
                   <th className="px-4 py-3 font-medium">Bank account</th>
                   <th className="px-4 py-3 font-medium">Status</th>
@@ -103,6 +107,7 @@ export function EmployeesPage() {
                     <td className="px-4 py-3">{employee.job_title_name ?? "—"}</td>
                     <td className="px-4 py-3">{employee.department_name ?? "—"}</td>
                     <td className="px-4 py-3">{formatDate(employee.hire_date)}</td>
+                    <td className="px-4 py-3">{employee.email_address ?? "—"}</td>
                     <td className="px-4 py-3">{employee.ssnit_number ?? "—"}</td>
                     <td className="px-4 py-3">
                       {employee.bank_account_number ? (
@@ -115,10 +120,14 @@ export function EmployeesPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">{employee.is_active ? "Active" : <span className="text-ink-soft">Not active</span>}</td>
-                    <td className="px-4 py-3 text-right">
-                      <Button onClick={() => setFormTarget(employee)} disabled={client.is_archived}>
-                        Edit
-                      </Button>
+                    <td className="px-4 py-2 text-right">
+                      <ActionsMenu
+                        label={`Actions for ${fullName(employee)}`}
+                        actions={[
+                          { label: "Payslips", to: `${employee.employee_id}/payslips` },
+                          { label: "Edit", onSelect: () => setFormTarget(employee), isDisabled: client.is_archived },
+                        ]}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -191,6 +200,7 @@ function EmployeeFormDialog({ clientId, target, onClose, onSaved }: EmployeeForm
           <TextField label="Last name" required maxLength={100} {...fieldProps("last_name")} />
           <TextField label="Employee code" maxLength={50} {...fieldProps("employee_code")} />
           <TextField label="Hire date" type="date" {...fieldProps("hire_date")} />
+          <TextField label="Email" type="email" maxLength={190} className="sm:col-span-2" {...fieldProps("email_address")} />
           <TextField label="Job title" maxLength={100} {...fieldProps("job_title_name")} />
           <TextField label="Department" maxLength={100} {...fieldProps("department_name")} />
           <TextField label="SSNIT number" maxLength={30} {...fieldProps("ssnit_number")} />

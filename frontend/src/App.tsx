@@ -3,10 +3,14 @@ import { BankEmailSettingsPage } from "./bank/BankEmailSettingsPage";
 import { ClientsPage } from "./clients/ClientsPage";
 import { ClientWorkspace } from "./clients/ClientWorkspace";
 import { DashboardPage } from "./dashboard/DashboardPage";
+import { EmployeePayslipsPage } from "./employees/EmployeePayslipsPage";
 import { EmployeesPage } from "./employees/EmployeesPage";
+import { PayItemsPage } from "./payItems/PayItemsPage";
+import { ContributionStatementPage } from "./payroll/ContributionStatementPage";
 import { PayrollRunPage } from "./payroll/PayrollRunPage";
 import { PayrollRunsPage } from "./payroll/PayrollRunsPage";
 import { PayslipsPage } from "./payroll/PayslipsPage";
+import { TaxAnalysisPage } from "./payroll/TaxAnalysisPage";
 import { PayrollRatesPage } from "./rates/PayrollRatesPage";
 import { SalariesPage } from "./salaries/SalariesPage";
 import { SalaryImportPage } from "./salaries/SalaryImportPage";
@@ -39,8 +43,10 @@ export function App() {
 
   return (
     <Routes>
-      {/* Payslips print on their own sheet, without the app around them. */}
+      {/* Payslips and statements print on their own sheets, without the app around them. */}
       <Route path="/clients/:clientId/payroll/:payrollRunId/payslips" element={<PayslipsPage />} />
+      <Route path="/clients/:clientId/payroll/:payrollRunId/contributions" element={<ContributionStatementPage />} />
+      <Route path="/clients/:clientId/payroll/:payrollRunId/tax-analysis" element={<TaxAnalysisPage />} />
 
       <Route element={<AccountantShell />}>
         <Route path="/" element={<DashboardPage />} />
@@ -52,7 +58,9 @@ export function App() {
           <Route path="payroll/:payrollRunId" element={<PayrollRunPage />} />
           <Route path="salaries" element={<SalariesPage />} />
           <Route path="salaries/import" element={<SalaryImportPage />} />
+          <Route path="pay-items" element={<PayItemsPage />} />
           <Route path="employees" element={<EmployeesPage />} />
+          <Route path="employees/:employeeId/payslips" element={<EmployeePayslipsPage />} />
           <Route path="bank" element={<BankEmailSettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
