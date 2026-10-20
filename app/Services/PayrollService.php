@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Helpers\InputText;
 use App\Models\ClientPayItem;
 use App\Models\Employee;
 use App\Models\EmployeePayItemAmount;
@@ -101,7 +102,7 @@ final class PayrollService {
 		$errors        = [];
 		foreach ($postedSalaries as $employeeId => $postedSalary) {
 			$employeeId = (int) $employeeId;
-			if (!is_array($postedSalary) || trim((string) ($postedSalary['basic_salary'] ?? '')) === '') {
+			if (!is_array($postedSalary) || trim(InputText::of($postedSalary['basic_salary'] ?? '')) === '') {
 				continue;
 			}
 			if (!in_array($employeeId, $activeEmployeeIds, true)) {
@@ -155,7 +156,7 @@ final class PayrollService {
 			return $fail('basic_salary', 'Enter a basic salary of 0 or more.');
 		}
 
-		$tier3Input   = trim((string) ($input['tier3_percent'] ?? ''));
+		$tier3Input   = trim(InputText::of($input['tier3_percent'] ?? ''));
 		$tier3Percent = $tier3Input === '' ? 0.0 : $this->parsePercent($tier3Input);
 		if ($tier3Percent === null) {
 			return $fail('tier3_percent', 'Enter Tier 3 as a percentage from 0 to 100.');
@@ -253,7 +254,7 @@ final class PayrollService {
 	 * Thousands separators are accepted ("4,000.00").
 	 */
 	public function parseAmount(mixed $rawAmount): ?float {
-		$cleaned = str_replace([',', ' '], '', trim((string) $rawAmount));
+		$cleaned = str_replace([',', ' '], '', trim(InputText::of($rawAmount)));
 		if ($cleaned === '' || !is_numeric($cleaned)) {
 			return null;
 		}
@@ -636,7 +637,7 @@ final class PayrollService {
 	}
 
 	private function parsePercent(mixed $rawPercent): ?float {
-		$cleaned = trim((string) $rawPercent);
+		$cleaned = trim(InputText::of($rawPercent));
 		if ($cleaned === '' || !is_numeric($cleaned)) {
 			return null;
 		}

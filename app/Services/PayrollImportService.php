@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Helpers\InputText;
 use App\Models\ClientPayItem;
 use App\Models\Employee;
 use App\Models\EmployeePayItemAmount;
@@ -190,10 +191,10 @@ final class PayrollImportService {
 			if (!is_array($chosenRow)) {
 				continue;
 			}
-			$employeeName = preg_replace('/\s+/', ' ', trim((string) ($chosenRow['employee_name'] ?? '')));
+			$employeeName = preg_replace('/\s+/', ' ', trim(InputText::of($chosenRow['employee_name'] ?? '')));
 			$rowLabel     = 'Row ' . (int) ($chosenRow['sheet_row'] ?? 0) . " ({$employeeName})";
 
-			$chosenEmployee = (string) ($chosenRow['employee_id'] ?? '');
+			$chosenEmployee = InputText::of($chosenRow['employee_id'] ?? '');
 			if ($chosenEmployee === self::CREATE_EMPLOYEE) {
 				$newName = $this->splitName($employeeName);
 				if ($newName === null) {

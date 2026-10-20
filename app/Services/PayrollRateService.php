@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Helpers\InputText;
 use App\Models\PayrollStatutoryRate;
 
 /**
@@ -57,7 +58,7 @@ final class PayrollRateService {
 	public function createRateSet(array $input, ?int $userId): array {
 		$errors = [];
 
-		$effectiveFrom = trim((string) ($input['effective_from'] ?? ''));
+		$effectiveFrom = trim(InputText::of($input['effective_from'] ?? ''));
 		$effectiveDate = \DateTime::createFromFormat('!Y-m-d', $effectiveFrom);
 		if (!$effectiveDate || $effectiveDate->format('Y-m-d') !== $effectiveFrom) {
 			$errors['effective_from'] = 'Enter the date the rates take effect.';
@@ -101,7 +102,7 @@ final class PayrollRateService {
 				'employer_ssnit_percent'   => $ssnitPercents['employer_ssnit_percent'],
 				'ssnit_tier1_percent'      => $ssnitPercents['ssnit_tier1_percent'],
 				'tier3_relief_cap_percent' => $ssnitPercents['tier3_relief_cap_percent'],
-				'note'                     => trim((string) ($input['note'] ?? '')) ?: null,
+				'note'                     => trim(InputText::of($input['note'] ?? '')) ?: null,
 				'created_by'               => $userId,
 			]);
 			foreach ($bands['bands'] as $bandIndex => $band) {
@@ -236,7 +237,7 @@ final class PayrollRateService {
 	}
 
 	private function parsePercent(mixed $rawPercent): ?float {
-		$cleaned = trim((string) $rawPercent);
+		$cleaned = trim(InputText::of($rawPercent));
 		if ($cleaned === '' || !is_numeric($cleaned)) {
 			return null;
 		}

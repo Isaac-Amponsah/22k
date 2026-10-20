@@ -91,7 +91,7 @@ final class PayrollController {
 
 	/** GET …/export/contributions — the SSNIT contribution statement as Excel. */
 	public function exportContributions(Request $request, int $clientId, int $payrollRunId): void {
-		$run = $this->findRunOrRefuse($payrollRunId);
+		$run = $this->findIssuedRunOrRefuse($payrollRunId);
 		(new PayrollExportService())->streamContributionStatementXlsx(
 			$run,
 			RequestContext::clientNameInScope(),
@@ -101,7 +101,7 @@ final class PayrollController {
 
 	/** GET …/export/tax-analysis — the PAYE tax analysis as Excel. */
 	public function exportTaxAnalysis(Request $request, int $clientId, int $payrollRunId): void {
-		$run = $this->findRunOrRefuse($payrollRunId);
+		$run = $this->findIssuedRunOrRefuse($payrollRunId);
 		(new PayrollExportService())->streamTaxAnalysisXlsx(
 			$run,
 			RequestContext::clientNameInScope(),
@@ -113,6 +113,15 @@ final class PayrollController {
 		$run = $this->payrollService->findRun($payrollRunId, RequestContext::clientIdInScope());
 		if ($run === null) {
 			throw new HttpError(404, 'Payroll run not found.');
+		}
+		return $run;
+	}
+
+	/** Statements are filed from frozen figures only: a draft's lines can still change. */
+	private function findIssuedRunOrRefuse(int $payrollRunId): array {
+		$run = $this->findRunOrRefuse($payrollRunId);
+		if ($run['status'] === PayrollService::STATUS_DRAFT) {
+			throw new HttpError(422, 'Finalise this payroll run before filing its statements.');
 		}
 		return $run;
 	}

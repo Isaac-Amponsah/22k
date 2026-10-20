@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Helpers\InputText;
 use App\Models\Client;
 
 /**
@@ -90,7 +91,7 @@ final class ClientService {
 		$clientDetails = [];
 
 		foreach (self::FIELD_MAX_LENGTHS as $field => $maxLength) {
-			$value = trim((string) ($input[$field] ?? ''));
+			$value = trim(InputText::of($input[$field] ?? ''));
 			if (mb_strlen($value) > $maxLength) {
 				$errors[$field] = "Keep this to {$maxLength} characters.";
 			}
