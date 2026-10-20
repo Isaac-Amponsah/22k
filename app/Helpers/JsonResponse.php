@@ -25,6 +25,8 @@ final class JsonResponse {
 		// Pay is confidential: no browser or proxy cache keeps an API answer.
 		header('Cache-Control: no-store, private');
 		header('X-Content-Type-Options: nosniff');
+		// An API answer is data, never a page: nothing in it may load or run, and nothing may frame it.
+		header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'");
 		echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 	}
 }

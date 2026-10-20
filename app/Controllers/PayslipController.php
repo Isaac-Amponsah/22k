@@ -68,6 +68,9 @@ final class PayslipController {
 					'email'   => RequestContext::signedInUserEmail(),
 				]
 			);
+		} catch (\InvalidArgumentException $refusal) {
+			// Our own refusal (a send already under way) - safe to show.
+			throw new HttpError(409, $refusal->getMessage());
 		} catch (\RuntimeException $mailError) {
 			error_log('Payslip emails failed: ' . $mailError->getMessage());
 			throw new HttpError(502, 'The payslips could not be emailed. Check the mail settings on the server, then try again.');

@@ -90,6 +90,9 @@ final class BankPayrollEmailController {
 			$payslipSummary = $payslipEmailService->summary(
 				$payslipEmailService->emailPayslipsForRun($run, RequestContext::clientIdInScope(), RequestContext::employerInScope(), $accountant)
 			);
+		} catch (\InvalidArgumentException $refusal) {
+			// The bank email went: a payslip send already under way is reported, not a reason to fail it.
+			$payslipSummary = $refusal->getMessage();
 		} catch (\RuntimeException $mailError) {
 			error_log('Payslip emails after the bank email failed: ' . $mailError->getMessage());
 			$payslipSummary = 'The payslips could not be emailed: send them again from the payroll run.';
