@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Helpers\InputText;
 use App\Helpers\Mailer;
 use App\Models\ClientBankEmailSetting;
 use App\Models\PayrollRunBankEmail;
@@ -46,7 +47,7 @@ final class BankPayrollEmailService {
 	public function saveSettings(int $clientId, ?int $userId, array $input): array {
 		$errors = [];
 
-		$bankName = trim((string) ($input['bank_name'] ?? ''));
+		$bankName = trim(InputText::of($input['bank_name'] ?? ''));
 		if (mb_strlen($bankName) > self::BANK_NAME_MAX) {
 			$errors['bank_name'] = 'Keep this to ' . self::BANK_NAME_MAX . ' characters.';
 		}

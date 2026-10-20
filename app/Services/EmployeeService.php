@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Helpers\InputText;
 use App\Models\Employee;
 
 /**
@@ -71,7 +72,7 @@ final class EmployeeService {
 		$employeeDetails = [];
 
 		foreach (self::TEXT_FIELD_MAX_LENGTHS as $field => $maxLength) {
-			$value = trim((string) ($input[$field] ?? ''));
+			$value = trim(InputText::of($input[$field] ?? ''));
 			if (isset(self::DIGIT_ONLY_FIELDS[$field])) {
 				$value = str_replace([' ', '-'], '', $value);
 				if ($value !== '' && !ctype_digit($value)) {
@@ -100,7 +101,7 @@ final class EmployeeService {
 			$errors['employee_code'] = 'Another employee of this client has this code.';
 		}
 
-		$hireDateInput = trim((string) ($input['hire_date'] ?? ''));
+		$hireDateInput = trim(InputText::of($input['hire_date'] ?? ''));
 		$employeeDetails['hire_date'] = null;
 		if ($hireDateInput !== '') {
 			$hireDate = \DateTime::createFromFormat('!Y-m-d', $hireDateInput);

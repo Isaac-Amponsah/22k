@@ -62,13 +62,28 @@ final class PayslipEmailService {
 	 * @throws \RuntimeException         When mail is not set up.
 	 */
 	public function emailPayslipsForRun(array $run, int $clientId, array $employer, array $accountant): array {
-		$clientName = (string) $employer['client_name'];
 		if ($run['status'] === PayrollService::STATUS_DRAFT) {
 			throw new \InvalidArgumentException('Finalise this payroll run before emailing payslips.');
 		}
 
 		$payrollRunId = (int) $run['payroll_run_id'];
-		$linesById    = [];
+		// Two requests at once (a double click, two tabs) would each find the same payslips unsent and email them twice.
+		if (!PayrollRunPayslipEmail::trySendingLock($payrollRunId)) {
+			throw new \InvalidArgumentException('These payslips are already being emailed. Wait a moment, then reload.');
+		}
+		try {
+			return $this->emailUnsentPayslips($run, $payrollRunId, $clientId, $employer, $accountant);
+		} finally {
+			PayrollRunPayslipEmail::releaseSendingLock($payrollRunId);
+		}
+	}
+
+	/**
+	 * @return array{sent_count: int, failed_employees: string[], employees_missing_email: string[]}
+	 */
+	private function emailUnsentPayslips(array $run, int $payrollRunId, int $clientId, array $employer, array $accountant): array {
+		$clientName = (string) $employer['client_name'];
+		$linesById  = [];
 		foreach ($run['lines'] ?? [] as $line) {
 			$linesById[(int) $line['payroll_run_line_id']] = $line;
 		}

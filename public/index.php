@@ -35,6 +35,13 @@ if (!str_starts_with($requestPath, '/api/')) {
 	header('X-Frame-Options: DENY');
 	header('X-Content-Type-Options: nosniff');
 	header('Referrer-Policy: same-origin');
+	// Scripts only from this site; the one outside source is Google Fonts. Inline styles are allowed for the
+	// print pages' own <style> blocks; inline scripts never are.
+	header(
+		"Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+		. "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+		. "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	);
 	readfile($singlePageApp);
 	return;
 }

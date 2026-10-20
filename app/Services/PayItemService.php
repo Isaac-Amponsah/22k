@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Helpers\InputText;
 use App\Models\ClientPayItem;
 
 /**
@@ -26,7 +27,7 @@ final class PayItemService {
 	 * @return array{errors: array<string, string>, pay_item: ?array}
 	 */
 	public function createPayItem(int $clientId, array $input): array {
-		$itemKind = (string) ($input['item_kind'] ?? '');
+		$itemKind = InputText::of($input['item_kind'] ?? '');
 		if (!in_array($itemKind, self::ITEM_KINDS, true)) {
 			return ['errors' => ['item_kind' => 'Choose allowance or deduction.'], 'pay_item' => null];
 		}
@@ -92,7 +93,7 @@ final class PayItemService {
 	 * @return array{errors: array<string, string>, columns: array}
 	 */
 	private function validateNameAndTax(int $clientId, string $itemKind, array $input, ?int $editedPayItemId): array {
-		$itemName = preg_replace('/\s+/', ' ', trim((string) ($input['item_name'] ?? '')));
+		$itemName = preg_replace('/\s+/', ' ', trim(InputText::of($input['item_name'] ?? '')));
 		$errors   = [];
 
 		if ($itemName === '') {
