@@ -61,7 +61,7 @@ export function SalaryImportPage() {
           employee_name: row.employee_name,
           employee_id: choice.employeeChoice,
           basic_salary: row.basic_salary,
-          flat_allowance: row.allowance,
+          allowance: row.allowance,
         }));
       return api.post(clientApiPath(client.client_id, "salaries/import/confirm"), { rows: chosenRows });
     },

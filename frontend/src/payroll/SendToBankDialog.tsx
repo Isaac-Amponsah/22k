@@ -1,5 +1,6 @@
 // The last look before a payroll run is emailed to the client's bank: who receives it, the words as
 // filled in from the client's template (still editable for this one email), and the attached bank file.
+// Sending it also emails each employee their payslip.
 
 import { useState } from "react";
 import type { FormEvent } from "react";
@@ -8,7 +9,7 @@ import { Link } from "react-router-dom";
 import { api, errorMessage } from "../lib/apiClient";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
 import { Button, Dialog, INPUT_CLASSES, LoadingState, Notice, TextField } from "../shared/ui";
-import type { RunBankEmail } from "../types";
+import type { RunBankEmail, RunPayslipEmails } from "../types";
 
 interface SendToBankDialogProps {
   isOpen: boolean;
@@ -16,15 +17,24 @@ interface SendToBankDialogProps {
   payrollRunId: number;
   /** Undefined while it is still being fetched. */
   bankEmail: RunBankEmail | undefined;
+  /** Undefined while it is still being fetched. */
+  payslipEmails: RunPayslipEmails | undefined;
   onClose: () => void;
   onSent: (message: string) => void;
 }
 
-export function SendToBankDialog({ isOpen, clientId, payrollRunId, bankEmail, onClose, onSent }: SendToBankDialogProps) {
+export function SendToBankDialog({ isOpen, clientId, payrollRunId, bankEmail, payslipEmails, onClose, onSent }: SendToBankDialogProps) {
   return (
     <Dialog isOpen={isOpen} title="Send payroll to the bank" onClose={onClose} widthClassName="max-w-2xl">
       {bankEmail ? (
-        <SendToBankForm clientId={clientId} payrollRunId={payrollRunId} bankEmail={bankEmail} onClose={onClose} onSent={onSent} />
+        <SendToBankForm
+          clientId={clientId}
+          payrollRunId={payrollRunId}
+          bankEmail={bankEmail}
+          payslipEmails={payslipEmails}
+          onClose={onClose}
+          onSent={onSent}
+        />
       ) : (
         <LoadingState />
       )}
@@ -34,7 +44,7 @@ export function SendToBankDialog({ isOpen, clientId, payrollRunId, bankEmail, on
 
 type SendToBankFormProps = Omit<SendToBankDialogProps, "isOpen" | "bankEmail"> & { bankEmail: RunBankEmail };
 
-function SendToBankForm({ clientId, payrollRunId, bankEmail, onClose, onSent }: SendToBankFormProps) {
+function SendToBankForm({ clientId, payrollRunId, bankEmail, payslipEmails, onClose, onSent }: SendToBankFormProps) {
   const queryClient = useQueryClient();
   const [emailSubject, setEmailSubject] = useState(bankEmail.email_subject);
   const [emailBody, setEmailBody] = useState(bankEmail.email_body);
@@ -129,6 +139,20 @@ function SendToBankForm({ clientId, payrollRunId, bankEmail, onClose, onSent }: 
           {bankEmail.attachment_filename}
         </a>
       </p>
+
+      {payslipEmails && payslipEmails.unsent_count > 0 ? (
+        <p className="text-sm text-ink-soft">
+          Payslips: emailed to {payslipEmails.unsent_count} {payslipEmails.unsent_count === 1 ? "employee" : "employees"}
+        </p>
+      ) : null}
+      {payslipEmails && payslipEmails.employees_missing_email.length > 0 ? (
+        <Notice tone="attention">
+          No email address for {payslipEmails.employees_missing_email.join(", ")}: no payslip by email.{" "}
+          <Link to={`/clients/${clientId}/employees`} className="font-medium underline underline-offset-2">
+            Open employees
+          </Link>
+        </Notice>
+      ) : null}
 
       <div className="flex justify-end gap-2 pt-2">
         <Button onClick={onClose} disabled={sendMutation.isPending}>

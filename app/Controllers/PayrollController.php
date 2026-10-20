@@ -89,6 +89,26 @@ final class PayrollController {
 		(new PayrollExportService())->streamXlsx($run, RequestContext::clientNameInScope());
 	}
 
+	/** GET …/export/contributions — the SSNIT contribution statement as Excel. */
+	public function exportContributions(Request $request, int $clientId, int $payrollRunId): void {
+		$run = $this->findRunOrRefuse($payrollRunId);
+		(new PayrollExportService())->streamContributionStatementXlsx(
+			$run,
+			RequestContext::clientNameInScope(),
+			RequestContext::clientSsnitEmployerNumberInScope()
+		);
+	}
+
+	/** GET …/export/tax-analysis — the PAYE tax analysis as Excel. */
+	public function exportTaxAnalysis(Request $request, int $clientId, int $payrollRunId): void {
+		$run = $this->findRunOrRefuse($payrollRunId);
+		(new PayrollExportService())->streamTaxAnalysisXlsx(
+			$run,
+			RequestContext::clientNameInScope(),
+			RequestContext::clientTaxIdentificationNumberInScope()
+		);
+	}
+
 	private function findRunOrRefuse(int $payrollRunId): array {
 		$run = $this->payrollService->findRun($payrollRunId, RequestContext::clientIdInScope());
 		if ($run === null) {

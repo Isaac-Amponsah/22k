@@ -134,6 +134,80 @@ final class PayrollRun {
 		return Database::insert('payroll_run_lines', $lineColumns, 'payroll_run_line_id');
 	}
 
+	/**
+	 * The allowances, deductions and reliefs on every line of a run, in line then item order.
+	 */
+	public static function getLineItems(int $payrollRunId, int $clientId): array {
+		return Database::fetchAll(
+			'SELECT item.payroll_run_line_id, item.item_kind, item.item_name, item.is_taxable, item.amount, item.item_order
+			 FROM payroll_run_line_items item
+			 JOIN payroll_run_lines line ON line.payroll_run_line_id = item.payroll_run_line_id AND line.client_id = item.client_id
+			 WHERE line.payroll_run_id = ? AND line.client_id = ?
+			 ORDER BY line.line_order ASC, item.payroll_run_line_id ASC, item.item_order ASC, item.payroll_run_line_item_id ASC',
+			[$payrollRunId, $clientId]
+		);
+	}
+
+	/**
+	 * Every finalised or paid line of one employee, latest month first, each with what its run was worked
+	 * out at: the payslips the employee has had.
+	 */
+	public static function getIssuedLinesForEmployee(int $employeeId, int $clientId): array {
+		return Database::fetchAll(
+			"SELECT line.*, run.pay_period, run.status, run.paid_at,
+			        run.employee_ssnit_percent, run.employer_ssnit_percent, run.ssnit_tier1_percent
+			 FROM payroll_run_lines line
+			 JOIN payroll_runs run ON run.payroll_run_id = line.payroll_run_id AND run.client_id = line.client_id
+			 WHERE line.employee_id = ? AND line.client_id = ?
+			   AND run.deleted_at IS NULL AND run.status <> 'draft'
+			 ORDER BY run.pay_period DESC",
+			[$employeeId, $clientId]
+		);
+	}
+
+	/**
+	 * The allowances, deductions and reliefs on every finalised or paid line of one employee.
+	 */
+	public static function getIssuedLineItemsForEmployee(int $employeeId, int $clientId): array {
+		return Database::fetchAll(
+			"SELECT item.payroll_run_line_id, item.item_kind, item.item_name, item.is_taxable, item.amount, item.item_order
+			 FROM payroll_run_line_items item
+			 JOIN payroll_run_lines line ON line.payroll_run_line_id = item.payroll_run_line_id AND line.client_id = item.client_id
+			 JOIN payroll_runs run ON run.payroll_run_id = line.payroll_run_id AND run.client_id = line.client_id
+			 WHERE line.employee_id = ? AND line.client_id = ?
+			   AND run.deleted_at IS NULL AND run.status <> 'draft'
+			 ORDER BY item.payroll_run_line_id ASC, item.item_order ASC, item.payroll_run_line_item_id ASC",
+			[$employeeId, $clientId]
+		);
+	}
+
+	/**
+	 * A run's lines with where each employee's payslip goes (their email address as it is now) and, when
+	 * it has been emailed, to which address and when.
+	 */
+	public static function getPayslipRecipientLines(int $payrollRunId, int $clientId): array {
+		return Database::fetchAll(
+			'SELECT line.payroll_run_line_id, line.employee_id, line.employee_name,
+			        employee.first_name, employee.email_address,
+			        sent_payslip.recipient_email AS sent_to_email, sent_payslip.sent_at AS payslip_sent_at
+			 FROM payroll_run_lines line
+			 JOIN employees employee ON employee.employee_id = line.employee_id AND employee.client_id = line.client_id
+			 LEFT JOIN payroll_run_payslip_emails sent_payslip
+			        ON sent_payslip.payroll_run_line_id = line.payroll_run_line_id AND sent_payslip.client_id = line.client_id
+			 WHERE line.payroll_run_id = ? AND line.client_id = ?
+			 ORDER BY line.line_order ASC, line.payroll_run_line_id ASC',
+			[$payrollRunId, $clientId]
+		);
+	}
+
+	/**
+	 * @param array $itemColumns client_id, payroll_run_line_id, item_kind, item_name, is_taxable, amount, item_order
+	 */
+	public static function insertLineItem(array $itemColumns): int {
+		return Database::insert('payroll_run_line_items', $itemColumns, 'payroll_run_line_item_id');
+	}
+
+	/** A line's items go with it (ON DELETE CASCADE). */
 	public static function deleteLines(int $payrollRunId, int $clientId): void {
 		Database::query(
 			'DELETE FROM payroll_run_lines WHERE payroll_run_id = ? AND client_id = ?',

@@ -22,6 +22,7 @@ final class EmployeeService {
 		'bank_name'                 => 100,
 		'bank_branch'               => 100,
 		'bank_sort_code'            => 10,
+		'email_address'             => 190,
 	];
 
 	/** Bank identifiers are digits only; spaces and dashes typed for readability are dropped. */
@@ -81,6 +82,11 @@ final class EmployeeService {
 				$errors[$field] = "Keep this to {$maxLength} characters.";
 			}
 			$employeeDetails[$field] = $value === '' ? null : $value;
+		}
+
+		if ($employeeDetails['email_address'] !== null && !isset($errors['email_address'])
+			&& !filter_var($employeeDetails['email_address'], FILTER_VALIDATE_EMAIL)) {
+			$errors['email_address'] = 'Enter a valid email address.';
 		}
 
 		foreach (['first_name' => 'first name', 'last_name' => 'last name'] as $field => $label) {

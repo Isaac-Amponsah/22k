@@ -9,10 +9,14 @@ export const queryKeys = {
 
   allOfClient: (clientId: number) => ["client", clientId] as const,
   employees: (clientId: number) => ["client", clientId, "employees"] as const,
+  employeePayslips: (clientId: number, employeeId: number) => ["client", clientId, "employees", employeeId, "payslips"] as const,
   salaries: (clientId: number) => ["client", clientId, "salaries"] as const,
+  payItems: (clientId: number) => ["client", clientId, "pay-items"] as const,
   payrollRuns: (clientId: number) => ["client", clientId, "payroll-runs"] as const,
   payrollRun: (clientId: number, payrollRunId: number) => ["client", clientId, "payroll-runs", payrollRunId] as const,
   runBankEmail: (clientId: number, payrollRunId: number) => ["client", clientId, "payroll-runs", payrollRunId, "bank-email"] as const,
+  runPayslipEmails: (clientId: number, payrollRunId: number) =>
+    ["client", clientId, "payroll-runs", payrollRunId, "payslip-emails"] as const,
   bankEmailSettings: (clientId: number) => ["client", clientId, "bank-email-settings"] as const,
 };
 

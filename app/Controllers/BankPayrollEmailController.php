@@ -10,6 +10,7 @@ use App\Services\BankEmailTemplate;
 use App\Services\BankPaymentFileService;
 use App\Services\BankPayrollEmailService;
 use App\Services\PayrollService;
+use App\Services\PayslipEmailService;
 
 /**
  * Bank Payroll Email Controller
@@ -54,20 +55,24 @@ final class BankPayrollEmailController {
 		JsonResponse::success(['bank_email' => $this->emailDraftFor($this->findRunOrRefuse($payrollRunId))]);
 	}
 
-	/** POST /api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email — send it. */
+	/**
+	 * POST /api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email — send it, then email each employee
+	 * their payslip. The bank email is what matters: payslips that fail are reported, not a reason to fail it.
+	 */
 	public function sendRunEmail(Request $request, int $clientId, int $payrollRunId): void {
-		$run = $this->findRunOrRefuse($payrollRunId);
+		$run        = $this->findRunOrRefuse($payrollRunId);
+		$accountant = [
+			'user_id' => RequestContext::signedInUserId(),
+			'name'    => RequestContext::signedInUserName(),
+			'email'   => RequestContext::signedInUserEmail(),
+		];
 
 		try {
 			$this->bankPayrollEmailService->sendRunToBank(
 				$run,
 				RequestContext::clientIdInScope(),
 				RequestContext::clientNameInScope(),
-				[
-					'user_id' => RequestContext::signedInUserId(),
-					'name'    => RequestContext::signedInUserName(),
-					'email'   => RequestContext::signedInUserEmail(),
-				],
+				$accountant,
 				(string) $request->input('email_subject', ''),
 				(string) $request->input('email_body', '')
 			);
@@ -80,7 +85,17 @@ final class BankPayrollEmailController {
 			throw new HttpError(502, 'The email could not be sent. Check the mail settings on the server, then try again.');
 		}
 
-		JsonResponse::success(['bank_email' => $this->emailDraftFor($run)], 'Payroll sent to the bank.');
+		$payslipEmailService = new PayslipEmailService();
+		try {
+			$payslipSummary = $payslipEmailService->summary(
+				$payslipEmailService->emailPayslipsForRun($run, RequestContext::clientIdInScope(), RequestContext::employerInScope(), $accountant)
+			);
+		} catch (\RuntimeException $mailError) {
+			error_log('Payslip emails after the bank email failed: ' . $mailError->getMessage());
+			$payslipSummary = 'The payslips could not be emailed: send them again from the payroll run.';
+		}
+
+		JsonResponse::success(['bank_email' => $this->emailDraftFor($run)], "Payroll sent to the bank. {$payslipSummary}");
 	}
 
 	/** GET /api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-file — the file the bank pays from, as Excel. */

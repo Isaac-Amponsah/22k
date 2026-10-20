@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api, errorMessage } from "../lib/apiClient";
 import { formatDate, formatMoney, formatPayMonth, formatPercent } from "../lib/formatting";
+import { differenceOf, sumOf } from "../lib/payrollLines";
 import { clientApiPath, queryKeys } from "../lib/queryKeys";
 import { Button, EmptyState, LoadingState } from "../shared/ui";
 import type { Client, PayrollRun, PayrollRunLine } from "../types";
@@ -19,10 +20,10 @@ const PAYSLIP_PRINT_STYLES = `
     width: 210mm;
     min-height: 148mm;
     margin: 0 auto 24px;
-    padding: 0.7in 0.75in;
+    padding: 0.55in 0.65in;
     background: #ffffff;
     box-shadow: 0 10px 30px rgb(22 32 46 / 0.14);
-    font-size: 10.5pt;
+    font-size: 9.5pt;
     line-height: 1.45;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -63,7 +64,7 @@ export function PayslipsPage() {
     return <EmptyState>Finalise the payroll run before printing payslips.</EmptyState>;
   }
 
-  const employerName = clientsQuery.data?.find((client) => client.client_id === clientId)?.client_name ?? "";
+  const employer = clientsQuery.data?.find((client) => client.client_id === clientId);
   const lines = (run.lines ?? []).filter((line) => onlyLineId === null || String(line.payroll_run_line_id) === onlyLineId);
   if (lines.length === 0) {
     return <EmptyState>Payslip not found.</EmptyState>;
@@ -81,100 +82,184 @@ export function PayslipsPage() {
       </div>
 
       {lines.map((line) => (
-        <PayslipSheet key={line.payroll_run_line_id} run={run} line={line} employerName={employerName} />
+        <PayslipSheet key={line.payroll_run_line_id} run={run} line={line} employer={employer} />
       ))}
     </div>
   );
 }
 
-function PayslipSheet({ run, line, employerName }: { run: PayrollRun; line: PayrollRunLine; employerName: string }) {
+function PayslipSheet({ run, line, employer }: { run: PayrollRun; line: PayrollRunLine; employer: Client | undefined }) {
+  const itemsOf = (itemKind: "allowance" | "deduction" | "relief") => line.items.filter((lineItem) => lineItem.item_kind === itemKind);
+  const hasTier3 = Number(line.tier3_contribution) > 0;
+  const reliefs = itemsOf("relief");
+  const tier2Percent = differenceOf(sumOf(run.employee_ssnit_percent, run.employer_ssnit_percent), run.ssnit_tier1_percent);
+
+  const earnings: LedgerEntry[] = [
+    { label: "Basic salary", amount: line.basic_salary },
+    ...itemsOf("allowance").map((allowance) => ({
+      label: allowance.item_name,
+      amount: allowance.amount,
+      tag: allowance.is_taxable === false ? "non-taxable" : undefined,
+    })),
+  ];
+  const deductions: LedgerEntry[] = [
+    { label: `SSNIT (${formatPercent(run.employee_ssnit_percent)}%)`, amount: line.employee_ssnit },
+    ...(hasTier3 ? [{ label: "Tier 3 pension", amount: line.tier3_contribution, tag: "voluntary" }] : []),
+    { label: "PAYE", amount: line.paye },
+    ...itemsOf("deduction").map((deduction) => ({ label: deduction.item_name, amount: deduction.amount })),
+  ];
+  const ledgerRowCount = Math.max(earnings.length, deductions.length);
+
+  const taxCells: StripCell[] = [
+    { label: "Assessable income", amount: sumOf(line.basic_less_ssnit, line.taxable_allowance) },
+    ...(Number(line.tier3_relief) > 0 ? [{ label: "Tier 3 relief", amount: line.tier3_relief }] : []),
+    ...(reliefs.length > 0
+      ? [{ label: "Personal relief", amount: line.personal_relief, note: reliefs.map((relief) => relief.item_name).join(", ") }]
+      : []),
+    { label: "Chargeable income", amount: line.chargeable_income, isResult: true },
+    { label: "PAYE", amount: line.paye, isResult: true },
+  ];
+  const ssnitCells: StripCell[] = [
+    { label: `Employee ${formatPercent(run.employee_ssnit_percent)}%`, amount: line.employee_ssnit },
+    { label: `Employer ${formatPercent(run.employer_ssnit_percent)}%`, amount: line.employer_ssnit },
+    { label: `Tier 1 ${formatPercent(run.ssnit_tier1_percent)}%`, amount: line.ssnit_tier1, note: "to SSNIT", isResult: true },
+    { label: `Tier 2 ${formatPercent(tier2Percent)}%`, amount: line.ssnit_tier2, note: "to trustee", isResult: true },
+    ...(hasTier3 ? [{ label: "Tier 3", amount: line.tier3_contribution, note: "voluntary", isResult: true }] : []),
+  ];
+
+  const position = [line.job_title_name, line.department_name].filter(Boolean).join(", ");
+  const employeeFields = [
+    { label: "Employee no.", value: line.employee_code },
+    { label: "Position", value: position },
+    { label: "SSNIT no.", value: line.ssnit_number },
+    { label: "TIN", value: line.tax_identification_number },
+  ].filter((employeeField) => employeeField.value);
+
   return (
     <article className="payslip-sheet">
-      <header className="flex items-end justify-between gap-6 border-b-2 border-[#16202e] pb-3">
+      <header className="flex items-end justify-between gap-6 border-b-2 border-[#16202e] pb-2.5">
         <div>
-          <h1 className="text-[22pt] leading-none font-bold tracking-[0.14em]">PAYSLIP</h1>
-          {employerName ? <p className="mt-1.5 font-semibold">{employerName}</p> : null}
+          {employer?.client_name ? <p className="text-[13pt] leading-tight font-bold tracking-[0.06em] uppercase">{employer.client_name}</p> : null}
+          {employer?.ssnit_employer_number ? <p className={`mt-1 ${CAPTION_CLASSES}`}>Employer SSNIT no. {employer.ssnit_employer_number}</p> : null}
         </div>
-        <dl className="text-right">
-          <div className="flex justify-end gap-2.5">
-            <dt className="text-[#55606f]">Pay month</dt>
-            <dd className="min-w-[34mm] font-semibold">{formatPayMonth(run.pay_period)}</dd>
-          </div>
-          {run.paid_at ? (
-            <div className="flex justify-end gap-2.5">
-              <dt className="text-[#55606f]">Paid on</dt>
-              <dd className="min-w-[34mm] font-semibold">{formatDate(run.paid_at)}</dd>
-            </div>
-          ) : null}
-        </dl>
+        <div className="text-right">
+          <h1 className="text-[17pt] leading-none font-bold tracking-[0.25em]">PAYSLIP</h1>
+          <p className="mt-1 text-[10.5pt] font-bold">{formatPayMonth(run.pay_period)}</p>
+          {run.paid_at ? <p className={CAPTION_CLASSES}>Paid on {formatDate(run.paid_at)}</p> : null}
+        </div>
       </header>
 
-      <section className="my-5 flex gap-10">
+      <section className="mt-3 flex flex-wrap gap-x-8 gap-y-2 bg-[#f3f5f8] px-3 py-2.5">
         <div>
-          <p className="text-[8pt] font-bold text-[#55606f]">Employee</p>
-          <p className="text-[12pt] font-bold">{line.employee_name}</p>
-          {line.employee_code ? <p>{line.employee_code}</p> : null}
+          <p className={CAPTION_CLASSES}>Employee</p>
+          <p className="text-[11pt] font-bold">{line.employee_name}</p>
         </div>
-        {line.job_title_name || line.department_name ? (
-          <div>
-            <p className="text-[8pt] font-bold text-[#55606f]">Position</p>
-            <p>{line.job_title_name}</p>
-            <p>{line.department_name}</p>
+        {employeeFields.map((employeeField) => (
+          <div key={employeeField.label}>
+            <p className={CAPTION_CLASSES}>{employeeField.label}</p>
+            <p>{employeeField.value}</p>
           </div>
-        ) : null}
+        ))}
       </section>
 
-      <table className="w-full border-separate border-spacing-0">
+      <table className="mt-3 w-full table-fixed border-collapse border border-[#16202e]">
+        <colgroup>
+          <col className="w-[32%]" />
+          <col className="w-[18%]" />
+          <col className="w-[32%]" />
+          <col className="w-[18%]" />
+        </colgroup>
         <thead>
-          <tr className="text-[8pt] text-[#55606f]">
-            <th className="border-y border-[#16202e] px-2.5 py-2 text-left font-bold">Description</th>
-            <th className="figure border-y border-[#16202e] px-2.5 py-2 font-bold">Amount (GHS)</th>
+          <tr className={`bg-[#f3f5f8] ${CAPTION_CLASSES}`}>
+            <th className="border-b border-[#16202e] px-2.5 py-1.5 text-left">Earnings</th>
+            <th className="figure border-b border-[#16202e] px-2.5 py-1.5">GHS</th>
+            <th className="border-b border-l border-[#16202e] px-2.5 py-1.5 text-left">Deductions</th>
+            <th className="figure border-b border-[#16202e] px-2.5 py-1.5">GHS</th>
           </tr>
         </thead>
         <tbody>
-          <PayslipRow label="Basic salary" amount={formatMoney(line.basic_salary)} />
-          <PayslipRow
-            label={`Less SSNIT (${formatPercent(run.employee_ssnit_percent)}%)`}
-            amount={`(${formatMoney(line.employee_ssnit)})`}
-            isDeduction
-          />
-          <PayslipRow label="Basic salary less SSNIT" amount={formatMoney(line.basic_less_ssnit)} />
-          <PayslipRow label="Allowance" amount={formatMoney(line.allowance)} />
-          <PayslipRow label="Chargeable income" amount={formatMoney(line.chargeable_income)} isSubtotal />
-          <PayslipRow label="Less PAYE" amount={`(${formatMoney(line.paye)})`} isDeduction />
+          {Array.from({ length: ledgerRowCount }, (_, rowIndex) => (
+            <tr key={rowIndex}>
+              <LedgerCells entry={earnings[rowIndex]} />
+              <LedgerCells entry={deductions[rowIndex]} isRightSide />
+            </tr>
+          ))}
           <tr className="font-bold">
-            <td className="border-y-2 border-[#16202e] px-2.5 py-3">Take home</td>
-            <td className="figure border-y-2 border-[#16202e] px-2.5 py-3 text-[14pt]">GHS {formatMoney(line.net_pay)}</td>
+            <td className="border-t border-[#16202e] px-2.5 py-1.5">Gross pay</td>
+            <td className="figure border-t border-[#16202e] px-2.5 py-1.5">{formatMoney(sumOf(line.basic_salary, line.allowance))}</td>
+            <td className="border-t border-l border-[#16202e] px-2.5 py-1.5">Total deductions</td>
+            <td className="figure border-t border-[#16202e] px-2.5 py-1.5">
+              {formatMoney(sumOf(line.employee_ssnit, line.tier3_contribution, line.paye, line.other_deductions))}
+            </td>
           </tr>
         </tbody>
       </table>
 
-      <p className="mt-3.5 text-[9pt] text-[#55606f]">
-        Employer SSNIT contribution ({formatPercent(run.employer_ssnit_percent)}%), paid on top of the above: GHS{" "}
-        {formatMoney(line.employer_ssnit)}
-      </p>
+      <div className="flex items-center justify-between bg-[#16202e] px-2.5 py-2.5 font-bold text-white">
+        <span className="tracking-[0.2em]">NET PAY</span>
+        <span className="text-[15pt]">GHS {formatMoney(line.net_pay)}</span>
+      </div>
 
-      <footer className="mt-14 flex justify-between gap-10 text-[9pt] text-[#55606f]">
-        <div className="w-[62mm] border-t border-[#16202e] pt-1.5">Authorised signatory</div>
-        <div className="w-[62mm] border-t border-[#16202e] pt-1.5">Employee</div>
+      <PayslipStrip heading="Tax analysis" cells={taxCells} />
+      <PayslipStrip heading="SSNIT" cells={ssnitCells} />
+
+      <footer className="mt-10 flex justify-between gap-10 text-[8pt] text-[#55606f]">
+        <div className="w-[58mm] border-t border-[#16202e] pt-1">Authorised signatory</div>
+        <div className="w-[58mm] border-t border-[#16202e] pt-1">Employee</div>
       </footer>
     </article>
   );
 }
 
-interface PayslipRowProps {
+const CAPTION_CLASSES = "text-[7pt] font-bold tracking-[0.05em] text-[#55606f] uppercase";
+
+interface LedgerEntry {
   label: string;
-  amount: string;
-  isDeduction?: boolean;
-  isSubtotal?: boolean;
+  amount: string | number;
+  tag?: string;
 }
 
-function PayslipRow({ label, amount, isDeduction = false, isSubtotal = false }: PayslipRowProps) {
-  const cellClasses = `border-b border-[#c9cfd8] px-2.5 py-2 ${isSubtotal ? "bg-[#f3f5f8] font-semibold" : ""}`;
+/** One side of a ledger row; an empty side when that column has run out of entries. */
+function LedgerCells({ entry, isRightSide = false }: { entry: LedgerEntry | undefined; isRightSide?: boolean }) {
+  const labelClasses = `px-2.5 py-1 ${isRightSide ? "border-l border-[#16202e]" : ""}`;
+  if (!entry) {
+    return (
+      <>
+        <td className={labelClasses} />
+        <td />
+      </>
+    );
+  }
   return (
-    <tr>
-      <td className={`${cellClasses} ${isDeduction ? "pl-[22px]" : ""}`}>{label}</td>
-      <td className={`figure ${cellClasses}`}>{amount}</td>
-    </tr>
+    <>
+      <td className={labelClasses}>
+        {entry.label}
+        {entry.tag ? <span className="ml-1.5 text-[7pt] text-[#55606f]">{entry.tag}</span> : null}
+      </td>
+      <td className="figure px-2.5 py-1">{formatMoney(entry.amount)}</td>
+    </>
+  );
+}
+
+interface StripCell {
+  label: string;
+  amount: string | number;
+  note?: string;
+  /** What the strip arrives at: shown bold. */
+  isResult?: boolean;
+}
+
+function PayslipStrip({ heading, cells }: { heading: string; cells: StripCell[] }) {
+  return (
+    <section className="mt-3 flex border border-[#c9cfd8]">
+      <h2 className={`flex w-[22mm] shrink-0 items-center bg-[#f3f5f8] px-2.5 ${CAPTION_CLASSES}`}>{heading}</h2>
+      {cells.map((cell) => (
+        <div key={cell.label} className="flex-1 border-l border-[#c9cfd8] px-2.5 py-1.5">
+          <p className={CAPTION_CLASSES}>{cell.label}</p>
+          <p className={`text-[10pt] tabular-nums ${cell.isResult ? "font-bold" : ""}`}>{formatMoney(cell.amount)}</p>
+          {cell.note ? <p className="text-[7pt] text-[#55606f]">{cell.note}</p> : null}
+        </div>
+      ))}
+    </section>
   );
 }

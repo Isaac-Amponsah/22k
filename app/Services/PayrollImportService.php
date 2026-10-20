@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Models\ClientPayItem;
 use App\Models\Employee;
+use App\Models\EmployeePayItemAmount;
 use App\Models\EmployeeSalary;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
@@ -16,7 +18,7 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
  *
  * The sheet has a two-row heading (BASIC / SALARY, ALLOWANCE, CHARGEABLE / INCOME, …) and one row
  * per employee. Columns are found by their headings, not their letters. The allowance is taken as
- * the flat amount the cell shows, whether typed or worked out by a formula.
+ * the amount the cell shows, whether typed or worked out by a formula.
  *
  * Nothing is saved on upload: the parsed rows go back to the browser for review, each matched to an
  * employee by name, and are saved only on confirm.
@@ -45,6 +47,11 @@ final class PayrollImportService {
 
 	/** Preview option: create the employee from the sheet's name instead of matching one. */
 	public const CREATE_EMPLOYEE = 'new';
+
+	/** The taxable allowance a Client with none gets for the sheet's ALLOWANCE column. */
+	private const NEW_ALLOWANCE_NAME          = 'Allowance';
+	private const NEW_ALLOWANCE_FALLBACK_NAME = 'Taxable allowance';
+	private const NEW_ALLOWANCE_ITEM_ID       = 0;
 
 	private PayrollService $payrollService;
 
@@ -135,11 +142,15 @@ final class PayrollImportService {
 
 	/**
 	 * Save the rows chosen in the preview. Every figure is checked again here exactly as a salary
-	 * typed on the Salaries page is; the employee each row names must be an active employee of this
-	 * Client. All or nothing.
+	 * typed on the Salaries page is, together with what else the employee already has (Tier 3, other
+	 * allowances, deductions, reliefs), which the import leaves as it is. The employee each row names
+	 * must be an active employee of this Client. All or nothing.
+	 *
+	 * The sheet's one ALLOWANCE column goes to the Client's first taxable allowance; a Client with none
+	 * gets an "Allowance" item for it.
 	 *
 	 * @param array $chosenRows Rows of: sheet_row, employee_name, employee_id (an id, or 'new'),
-	 *                          basic_salary, flat_allowance.
+	 *                          basic_salary, allowance.
 	 * @return array{saved: int, created: int, errors: string[]}
 	 */
 	public function applyRows(int $clientId, ?int $userId, array $chosenRows): array {
@@ -151,13 +162,26 @@ final class PayrollImportService {
 			return ['saved' => 0, 'created' => 0, 'errors' => ['Too many rows for one import.']];
 		}
 
-		$activeEmployeeIds = array_map(
-			static fn(array $employee): int => (int) $employee['employee_id'],
-			EmployeeSalary::listActiveForClient($clientId)
-		);
+		$tier3PercentByEmployee = [];
+		foreach (EmployeeSalary::listActiveForClient($clientId) as $employee) {
+			$tier3PercentByEmployee[(int) $employee['employee_id']] = (float) ($employee['tier3_percent'] ?? 0);
+		}
+		$storedInputs    = $this->payrollService->storedPayInputsByEmployee($clientId);
+		$payItems        = ClientPayItem::listForClient($clientId);
+		$importAllowance = ClientPayItem::firstTaxableAllowanceForClient($clientId);
+		// Until it is created on save, the allowance a Client without one gets is checked as item 0.
+		$importAllowanceId = $importAllowance === null ? self::NEW_ALLOWANCE_ITEM_ID : (int) $importAllowance['pay_item_id'];
+		if ($importAllowance === null) {
+			$payItems[] = [
+				'pay_item_id' => self::NEW_ALLOWANCE_ITEM_ID,
+				'item_kind'   => ClientPayItem::KIND_ALLOWANCE,
+				'item_name'   => self::NEW_ALLOWANCE_NAME,
+				'is_taxable'  => true,
+			];
+		}
 
 		$errors          = [];
-		$salaryByRow     = [];
+		$importedByRow   = [];
 		$employeeByRow   = [];
 		$newNameByRow    = [];
 		$chosenEmployees = [];
@@ -177,7 +201,7 @@ final class PayrollImportService {
 					continue;
 				}
 				$newNameByRow[$rowIndex] = $newName;
-			} elseif (!in_array((int) $chosenEmployee, $activeEmployeeIds, true)) {
+			} elseif (!isset($tier3PercentByEmployee[(int) $chosenEmployee])) {
 				$errors[] = "{$rowLabel}: choose the employee this row belongs to.";
 				continue;
 			} elseif (isset($chosenEmployees[(int) $chosenEmployee])) {
@@ -187,27 +211,47 @@ final class PayrollImportService {
 				$chosenEmployees[(int) $chosenEmployee] = true;
 			}
 
-			$validated = $this->payrollService->validateSalaryInput($chosenRow, $rateSet);
+			$existingEmployeeId = $chosenEmployee === self::CREATE_EMPLOYEE ? 0 : (int) $chosenEmployee;
+			$validated          = $this->payrollService->validateSalaryInput([
+				'basic_salary'  => $chosenRow['basic_salary'] ?? null,
+				'tier3_percent' => $tier3PercentByEmployee[$existingEmployeeId] ?? 0,
+				'pay_items'     => [$importAllowanceId => $chosenRow['allowance'] ?? ''] + ($storedInputs['amounts'][$existingEmployeeId] ?? []),
+				'reliefs'       => $storedInputs['reliefs'][$existingEmployeeId] ?? [],
+			], $payItems, $rateSet);
 			if ($validated['error'] !== null) {
 				$errors[] = "{$rowLabel}: {$validated['error']}";
 				continue;
 			}
 
-			$salaryByRow[$rowIndex]   = $validated['salary'];
+			$importedByRow[$rowIndex] = [
+				'basic_salary' => $validated['salary']['basic_salary'],
+				'allowance'    => $validated['pay_item_amounts'][$importAllowanceId] ?? 0.0,
+			];
 			$employeeByRow[$rowIndex] = $chosenEmployee;
 		}
 
 		if ($errors !== []) {
 			return ['saved' => 0, 'created' => 0, 'errors' => $errors];
 		}
-		if ($salaryByRow === []) {
+		if ($importedByRow === []) {
 			return ['saved' => 0, 'created' => 0, 'errors' => ['No rows were selected for import.']];
 		}
 
 		$createdCount = 0;
 		Database::beginTransaction();
 		try {
-			foreach ($salaryByRow as $rowIndex => $salary) {
+			if ($importAllowance === null) {
+				$importAllowanceId = ClientPayItem::insertPayItem($clientId, [
+					'item_kind'     => ClientPayItem::KIND_ALLOWANCE,
+					'item_name'     => ClientPayItem::nameTaken($clientId, ClientPayItem::KIND_ALLOWANCE, self::NEW_ALLOWANCE_NAME)
+						? self::NEW_ALLOWANCE_FALLBACK_NAME
+						: self::NEW_ALLOWANCE_NAME,
+					'is_taxable'    => true,
+					'display_order' => ClientPayItem::nextDisplayOrder($clientId, ClientPayItem::KIND_ALLOWANCE),
+				]);
+			}
+
+			foreach ($importedByRow as $rowIndex => $imported) {
 				$employeeId = $employeeByRow[$rowIndex];
 				if ($employeeId === self::CREATE_EMPLOYEE) {
 					[$firstName, $lastName] = $newNameByRow[$rowIndex];
@@ -218,7 +262,8 @@ final class PayrollImportService {
 					], $userId);
 					$createdCount++;
 				}
-				EmployeeSalary::upsertForEmployee($clientId, (int) $employeeId, $salary, $userId);
+				EmployeeSalary::upsertBasicSalaryForEmployee($clientId, (int) $employeeId, $imported['basic_salary'], $userId);
+				EmployeePayItemAmount::setForEmployee($clientId, (int) $employeeId, $importAllowanceId, $imported['allowance']);
 			}
 			Database::commit();
 		} catch (\Throwable $e) {
@@ -226,7 +271,7 @@ final class PayrollImportService {
 			throw $e;
 		}
 
-		return ['saved' => count($salaryByRow), 'created' => $createdCount, 'errors' => []];
+		return ['saved' => count($importedByRow), 'created' => $createdCount, 'errors' => []];
 	}
 
 	// -------------------------------------------------------------------------

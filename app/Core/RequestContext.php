@@ -55,4 +55,23 @@ final class RequestContext {
 	public static function clientNameInScope(): string {
 		return (string) (self::$clientInScope['client_name'] ?? '');
 	}
+
+	/**
+	 * The Client in scope as an employer on its payslips: its name and SSNIT employer number.
+	 *
+	 * @return array{client_name: string, ssnit_employer_number: string}
+	 */
+	public static function employerInScope(): array {
+		return ['client_name' => self::clientNameInScope(), 'ssnit_employer_number' => self::clientSsnitEmployerNumberInScope()];
+	}
+
+	/** The Client's SSNIT employer number, or '' when none is recorded. */
+	public static function clientSsnitEmployerNumberInScope(): string {
+		return (string) (self::$clientInScope['ssnit_employer_number'] ?? '');
+	}
+
+	/** The Client's TIN, or '' when none is recorded. */
+	public static function clientTaxIdentificationNumberInScope(): string {
+		return (string) (self::$clientInScope['tax_identification_number'] ?? '');
+	}
 }
