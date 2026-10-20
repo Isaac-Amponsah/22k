@@ -7,6 +7,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, errorMessage, fieldErrorsOf } from "../lib/apiClient";
 import { clientBinder } from "../lib/clientBinder";
 import { queryKeys } from "../lib/queryKeys";
+import { ActionsMenu } from "../shared/ActionsMenu";
 import { Button, ConfirmDialog, Dialog, EmptyState, LoadingState, Notice, PageHeading, TextField } from "../shared/ui";
 import type { Client } from "../types";
 import { useClientsQuery } from "./useClientsQuery";
@@ -145,18 +146,25 @@ function ClientBinderCard({ client, onEdit, onArchive }: ClientBinderCardProps) 
       style={{ borderLeftColor: binder.spine }}
       className={`flex flex-col rounded-xl border border-l-[10px] border-rule bg-surface shadow-card ${client.is_archived ? "opacity-70" : ""}`}
     >
-      <Link to={`/clients/${client.client_id}`} className="block flex-1 rounded-tr-lg px-5 pt-5 pb-4 hover:bg-paper/60">
-        <span style={{ color: binder.spine }} className="font-serif text-xl font-semibold leading-snug">
-          {client.client_name}
-        </span>
-        <span className="mt-2 block text-sm text-ink-soft">
-          {client.tax_identification_number ? `TIN ${client.tax_identification_number}` : "No TIN recorded"}
-        </span>
-      </Link>
-      <div className="flex gap-2 border-t border-rule px-5 py-3">
-        <Button onClick={() => onEdit(client)}>Edit details</Button>
-        {client.is_archived ? <Button onClick={() => onArchive(client)}>Restore</Button> : null}
-        {!client.is_archived && IS_CLIENT_ARCHIVING_OFFERED ? <Button onClick={() => onArchive(client)}>Archive</Button> : null}
+      <div className="flex flex-1 items-start">
+        <Link to={`/clients/${client.client_id}`} className="block flex-1 rounded-tr-lg px-5 pt-5 pb-4 hover:bg-paper/60">
+          <span style={{ color: binder.spine }} className="font-serif text-xl font-semibold leading-snug">
+            {client.client_name}
+          </span>
+          <span className="mt-2 block text-sm text-ink-soft">
+            {client.tax_identification_number ? `TIN ${client.tax_identification_number}` : "No TIN recorded"}
+          </span>
+        </Link>
+        <div className="px-2 pt-4">
+          <ActionsMenu
+            label={`Actions for ${client.client_name}`}
+            actions={[
+              { label: "Edit details", onSelect: () => onEdit(client) },
+              ...(client.is_archived ? [{ label: "Restore", onSelect: () => onArchive(client) }] : []),
+              ...(!client.is_archived && IS_CLIENT_ARCHIVING_OFFERED ? [{ label: "Archive", onSelect: () => onArchive(client) }] : []),
+            ]}
+          />
+        </div>
       </div>
     </li>
   );

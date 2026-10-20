@@ -7,7 +7,8 @@ use App\Models\PayrollStatutoryRate;
 
 /**
  * PayrollRateService
- * Statutory payroll rates: SSNIT percentages and the monthly PAYE bands, effective-dated.
+ * Statutory payroll rates: SSNIT percentages (with the Tier 1 share and the Tier 3 relief cap), the monthly
+ * PAYE bands and the personal relief amounts, effective-dated.
  * A rate set is never edited — a change in the law is a new set with its own start date, so the
  * months already paid keep the rates they were worked with.
  */
@@ -16,15 +17,41 @@ final class PayrollRateService {
 	/** More bands than any PAYE table has had; stops a runaway form post. */
 	private const MAX_BANDS = 20;
 
+	/** Percentage fields of a rate set => how the refusal names them. */
+	private const PERCENT_FIELDS = [
+		'employee_ssnit_percent'   => 'employee SSNIT rate',
+		'employer_ssnit_percent'   => 'employer SSNIT rate',
+		'ssnit_tier1_percent'      => 'Tier 1 share',
+		'tier3_relief_cap_percent' => 'Tier 3 relief cap',
+	];
+
 	public function listRateSets(): array {
 		return PayrollStatutoryRate::allWithBands();
 	}
 
 	/**
+	 * The personal reliefs a rate set can allow, and whether each is a percentage of assessable income.
+	 *
+	 * @return array<int, array{relief_code: string, label: string, is_percent_of_assessable: bool}>
+	 */
+	public function listReliefTypes(): array {
+		$reliefTypes = [];
+		foreach (TaxReliefTypes::LABELS as $reliefCode => $label) {
+			$reliefTypes[] = [
+				'relief_code'              => $reliefCode,
+				'label'                    => $label,
+				'is_percent_of_assessable' => TaxReliefTypes::isPercentOfAssessable($reliefCode),
+			];
+		}
+		return $reliefTypes;
+	}
+
+	/**
 	 * Add a rate set.
 	 *
-	 * @param array $input effective_from, employee_ssnit_percent, employer_ssnit_percent, note,
-	 *                     band_width[] and rate_percent[] (the last band's width is left blank).
+	 * @param array $input effective_from, employee_ssnit_percent, employer_ssnit_percent, ssnit_tier1_percent,
+	 *                     tier3_relief_cap_percent, note, band_width[] and rate_percent[] (the last band's width is
+	 *                     left blank), reliefs[relief_code][amount, max_claims].
 	 * @return array{errors: array<string, string>, statutory_rate_id: ?int}
 	 */
 	public function createRateSet(array $input, ?int $userId): array {
@@ -39,12 +66,22 @@ final class PayrollRateService {
 		}
 
 		$ssnitPercents = [];
-		foreach (['employee_ssnit_percent' => 'employee SSNIT', 'employer_ssnit_percent' => 'employer SSNIT'] as $field => $label) {
+		foreach (self::PERCENT_FIELDS as $field => $label) {
 			$percent = $this->parsePercent($input[$field] ?? null);
 			if ($percent === null) {
-				$errors[$field] = "Enter the {$label} rate as a percentage from 0 to 100.";
+				$errors[$field] = "Enter the {$label} as a percentage from 0 to 100.";
 			}
 			$ssnitPercents[$field] = $percent;
+		}
+		$totalSsnitPercent = (float) $ssnitPercents['employee_ssnit_percent'] + (float) $ssnitPercents['employer_ssnit_percent'];
+		if (!isset($errors['ssnit_tier1_percent']) && $ssnitPercents['ssnit_tier1_percent'] > $totalSsnitPercent) {
+			$errors['ssnit_tier1_percent'] = 'Tier 1 cannot be more than employee and employer SSNIT together ('
+				. rtrim(rtrim(number_format($totalSsnitPercent, 2, '.', ''), '0'), '.') . '%).';
+		}
+
+		$reliefs = $this->parseReliefs((array) ($input['reliefs'] ?? []));
+		if ($reliefs['error'] !== null) {
+			$errors['reliefs'] = $reliefs['error'];
 		}
 
 		$bands = $this->parseBands((array) ($input['band_width'] ?? []), (array) ($input['rate_percent'] ?? []));
@@ -61,9 +98,11 @@ final class PayrollRateService {
 			$statutoryRateId = PayrollStatutoryRate::insertRateSet([
 				'effective_from'         => $effectiveFrom,
 				'employee_ssnit_percent' => $ssnitPercents['employee_ssnit_percent'],
-				'employer_ssnit_percent' => $ssnitPercents['employer_ssnit_percent'],
-				'note'                   => trim((string) ($input['note'] ?? '')) ?: null,
-				'created_by'             => $userId,
+				'employer_ssnit_percent'   => $ssnitPercents['employer_ssnit_percent'],
+				'ssnit_tier1_percent'      => $ssnitPercents['ssnit_tier1_percent'],
+				'tier3_relief_cap_percent' => $ssnitPercents['tier3_relief_cap_percent'],
+				'note'                     => trim((string) ($input['note'] ?? '')) ?: null,
+				'created_by'               => $userId,
 			]);
 			foreach ($bands['bands'] as $bandIndex => $band) {
 				PayrollStatutoryRate::insertBand([
@@ -72,6 +111,9 @@ final class PayrollRateService {
 					'band_width'        => $band['band_width'],
 					'rate_percent'      => $band['rate_percent'],
 				]);
+			}
+			foreach ($reliefs['reliefs'] as $relief) {
+				PayrollStatutoryRate::insertRelief(['statutory_rate_id' => $statutoryRateId] + $relief);
 			}
 			Database::commit();
 		} catch (\Throwable $e) {
@@ -100,7 +142,7 @@ final class PayrollRateService {
 		try {
 			PayrollStatutoryRate::deleteById($statutoryRateId);
 		} catch (\PDOException $e) {
-			if ($e->getCode() === PayrollStatutoryRate::FOREIGN_KEY_VIOLATION) {
+			if ($e->getCode() === PayrollStatutoryRate::RESTRICT_VIOLATION) {
 				throw new \InvalidArgumentException('Payroll runs were computed from this rate set, so it cannot be deleted.');
 			}
 			throw $e;
@@ -151,6 +193,46 @@ final class PayrollRateService {
 		}
 
 		return ['bands' => $bands, 'error' => null];
+	}
+
+	/**
+	 * The personal reliefs the set allows. A relief left blank is not allowed under the set. A fixed
+	 * relief is an annual amount with the most claims (children, dependants) allowed; disability is a
+	 * percentage of assessable income.
+	 *
+	 * @param array $postedReliefs [relief_code => [amount, max_claims]]
+	 * @return array{reliefs: array, error: ?string}
+	 */
+	private function parseReliefs(array $postedReliefs): array {
+		$reliefs = [];
+		foreach (TaxReliefTypes::LABELS as $reliefCode => $reliefLabel) {
+			$postedRelief = (array) ($postedReliefs[$reliefCode] ?? []);
+			$amountInput  = str_replace([',', ' '], '', trim((string) ($postedRelief['amount'] ?? '')));
+			if ($amountInput === '') {
+				continue;
+			}
+
+			$isPercent = TaxReliefTypes::isPercentOfAssessable($reliefCode);
+			$amount    = $isPercent ? $this->parsePercent($amountInput) : (is_numeric($amountInput) && (float) $amountInput >= 0 ? round((float) $amountInput, 2) : null);
+			if ($amount === null) {
+				return ['reliefs' => [], 'error' => $isPercent
+					? "{$reliefLabel}: enter the relief as a percentage from 0 to 100."
+					: "{$reliefLabel}: enter the annual amount as 0 or more."];
+			}
+
+			$maxClaims = $isPercent ? 1 : filter_var($postedRelief['max_claims'] ?? 1, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 99]]);
+			if ($maxClaims === false) {
+				return ['reliefs' => [], 'error' => "{$reliefLabel}: enter the most claims allowed, from 1 to 99."];
+			}
+
+			$reliefs[] = [
+				'relief_code'           => $reliefCode,
+				'annual_amount'         => $isPercent ? null : $amount,
+				'percent_of_assessable' => $isPercent ? $amount : null,
+				'max_claims'            => $maxClaims,
+			];
+		}
+		return ['reliefs' => $reliefs, 'error' => null];
 	}
 
 	private function parsePercent(mixed $rawPercent): ?float {

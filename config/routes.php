@@ -16,9 +16,11 @@ use App\Controllers\BankPayrollEmailController;
 use App\Controllers\ClientController;
 use App\Controllers\DashboardController;
 use App\Controllers\EmployeeController;
+use App\Controllers\PayItemController;
 use App\Controllers\PayrollController;
 use App\Controllers\PayrollRateController;
 use App\Controllers\PayrollSalaryController;
+use App\Controllers\PayslipController;
 use App\Core\Router;
 use App\Middleware\AuthMiddleware;
 use App\Middleware\ClientScopeMiddleware;
@@ -53,6 +55,13 @@ return static function (Router $router): void {
 	$router->add('GET', '/api/clients/{clientId}/employees', [EmployeeController::class, 'index'], $clientScoped);
 	$router->add('POST', '/api/clients/{clientId}/employees', [EmployeeController::class, 'store'], $clientScoped);
 	$router->add('PATCH', '/api/clients/{clientId}/employees/{employeeId}', [EmployeeController::class, 'update'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/employees/{employeeId}/payslips', [PayslipController::class, 'employeePayslips'], $clientScoped);
+
+	// One Client's allowance and deduction types
+	$router->add('GET', '/api/clients/{clientId}/pay-items', [PayItemController::class, 'index'], $clientScoped);
+	$router->add('POST', '/api/clients/{clientId}/pay-items', [PayItemController::class, 'store'], $clientScoped);
+	$router->add('PATCH', '/api/clients/{clientId}/pay-items/{payItemId}', [PayItemController::class, 'update'], $clientScoped);
+	$router->add('DELETE', '/api/clients/{clientId}/pay-items/{payItemId}', [PayItemController::class, 'delete'], $clientScoped);
 
 	// One Client's salaries
 	$router->add('GET', '/api/clients/{clientId}/salaries', [PayrollSalaryController::class, 'index'], $clientScoped);
@@ -69,6 +78,8 @@ return static function (Router $router): void {
 	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/finalise', [PayrollController::class, 'finalise'], $clientScoped);
 	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/mark-paid', [PayrollController::class, 'markPaid'], $clientScoped);
 	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/export', [PayrollController::class, 'export'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/export/contributions', [PayrollController::class, 'exportContributions'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/export/tax-analysis', [PayrollController::class, 'exportTaxAnalysis'], $clientScoped);
 
 	// Sending one Client's payroll to its bank by email
 	$router->add('GET', '/api/clients/{clientId}/bank-email-settings', [BankPayrollEmailController::class, 'showSettings'], $clientScoped);
@@ -76,4 +87,9 @@ return static function (Router $router): void {
 	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email', [BankPayrollEmailController::class, 'showRunEmail'], $clientScoped);
 	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-email', [BankPayrollEmailController::class, 'sendRunEmail'], $clientScoped);
 	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/bank-file', [BankPayrollEmailController::class, 'downloadBankFile'], $clientScoped);
+
+	// Payslips of one run: a PDF each, and emailing them to the employees
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/payslips/{payrollRunLineId}/pdf', [PayslipController::class, 'downloadPdf'], $clientScoped);
+	$router->add('GET', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/payslip-emails', [PayslipController::class, 'showRunEmails'], $clientScoped);
+	$router->add('POST', '/api/clients/{clientId}/payroll-runs/{payrollRunId}/payslip-emails', [PayslipController::class, 'sendRunEmails'], $clientScoped);
 };

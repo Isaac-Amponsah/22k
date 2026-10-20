@@ -3,13 +3,19 @@
 namespace App\Services;
 
 use App\Helpers\Database;
+use App\Models\ClientPayItem;
+use App\Models\Employee;
+use App\Models\EmployeePayItemAmount;
 use App\Models\EmployeeSalary;
+use App\Models\EmployeeTaxRelief;
 use App\Models\PayrollRun;
 use App\Models\PayrollStatutoryRate;
 
 /**
  * PayrollService
  * A Client's salaries and monthly payroll runs: draft → finalised (figures frozen) → paid.
+ * A salary is a basic salary, an amount on any of the Client's allowances and deductions, a voluntary
+ * Tier 3 percentage and the personal reliefs claimed.
  * Queries live in the models; the arithmetic lives in PayrollCalculator.
  */
 final class PayrollService {
@@ -21,53 +27,62 @@ final class PayrollService {
 	/** Largest amount a numeric(12,2) salary column holds. */
 	private const MAX_AMOUNT = 9999999999.99;
 
-	/** Run total columns, keyed by the line figure each one sums. */
-	private const TOTAL_COLUMNS = [
-		'basic_salary'      => 'total_basic_salary',
-		'employee_ssnit'    => 'total_employee_ssnit',
-		'basic_less_ssnit'  => 'total_basic_less_ssnit',
-		'allowance'         => 'total_allowance',
-		'chargeable_income' => 'total_chargeable_income',
-		'paye'              => 'total_paye',
-		'net_pay'           => 'total_net_pay',
-		'employer_ssnit'    => 'total_employer_ssnit',
-	];
+	/** Most claims any relief allows; stops a runaway form post before the rate set is asked. */
+	private const MAX_RELIEF_CLAIMS = 99;
 
 	// -------------------------------------------------------------------------
 	// Salaries
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Active employees with their salary and, where one is set, the pay it works out to
-	 * at the rates in force this month.
+	 * Active employees with their salary and, where one is set, the pay it works out to at the rates
+	 * in force this month; the Client's pay items; and the reliefs that can be claimed.
 	 *
-	 * @return array{employees: array, rate_set: ?array}
+	 * @return array{employees: array, rate_set: ?array, pay_items: array, relief_types: array}
 	 */
 	public function salaryList(int $clientId): array {
-		$rateSet   = $this->rateSetInForce(date('Y-m-01'));
-		$employees = EmployeeSalary::listActiveForClient($clientId);
+		$rateSet      = $this->rateSetInForce(date('Y-m-01'));
+		$payItems     = ClientPayItem::listForClient($clientId);
+		$storedInputs = $this->storedPayInputsByEmployee($clientId);
+		$employees    = EmployeeSalary::listActiveForClient($clientId);
 
 		foreach ($employees as $employeeIndex => $employee) {
-			$employees[$employeeIndex]['pay'] = null;
+			$employeeId = (int) $employee['employee_id'];
+			$employees[$employeeIndex]['pay_item_amounts'] = (object) ($storedInputs['amounts'][$employeeId] ?? []);
+			$employees[$employeeIndex]['relief_claims']    = (object) ($storedInputs['reliefs'][$employeeId] ?? []);
+			$employees[$employeeIndex]['pay']              = null;
 			if ($rateSet === null || $employee['employee_salary_id'] === null) {
 				continue;
 			}
 			try {
-				$employees[$employeeIndex]['pay'] = $this->computePay($employee, $rateSet);
+				$employees[$employeeIndex]['pay'] = PayrollCalculator::compute(
+					$this->payInputs($employee, $storedInputs['amounts'][$employeeId] ?? [], $storedInputs['reliefs'][$employeeId] ?? [], $payItems),
+					$rateSet
+				);
 			} catch (\InvalidArgumentException $e) {
 				// A stored figure the calculator refuses: shown as "needs attention".
 				$employees[$employeeIndex]['pay_error'] = $e->getMessage();
 			}
 		}
 
-		return ['employees' => $employees, 'rate_set' => $rateSet];
+		return [
+			'employees'    => $employees,
+			'rate_set'     => $rateSet,
+			'pay_items'    => $payItems,
+			'relief_types' => array_map(
+				static fn(string $reliefCode, string $label): array => ['relief_code' => $reliefCode, 'label' => $label],
+				array_keys(TaxReliefTypes::LABELS),
+				TaxReliefTypes::LABELS
+			),
+		];
 	}
 
 	/**
 	 * Save the salaries posted from the Salaries page. All or nothing: one bad row saves none.
 	 * A row whose basic salary is left blank is skipped (that employee has no salary yet).
 	 *
-	 * @param array $postedSalaries [employee_id => [basic_salary, flat_allowance]]
+	 * @param array $postedSalaries [employee_id => [basic_salary, tier3_percent, pay_items: [pay_item_id => amount],
+	 *                              reliefs: [relief_code => claim_count]]]
 	 * @return array{saved: int, errors: array<string, string>} errors keyed by the form field name.
 	 */
 	public function saveSalaries(int $clientId, ?int $userId, array $postedSalaries): array {
@@ -80,6 +95,7 @@ final class PayrollService {
 			static fn(array $employee): int => (int) $employee['employee_id'],
 			EmployeeSalary::listActiveForClient($clientId)
 		);
+		$payItems = ClientPayItem::listForClient($clientId);
 
 		$validSalaries = [];
 		$errors        = [];
@@ -93,12 +109,12 @@ final class PayrollService {
 				continue;
 			}
 
-			$validated = $this->validateSalaryInput($postedSalary, $rateSet);
+			$validated = $this->validateSalaryInput($postedSalary, $payItems, $rateSet);
 			if ($validated['error'] !== null) {
 				$errors["salaries[{$employeeId}][{$validated['field']}]"] = $validated['error'];
 				continue;
 			}
-			$validSalaries[$employeeId] = $validated['salary'];
+			$validSalaries[$employeeId] = $validated;
 		}
 
 		if ($errors !== []) {
@@ -107,8 +123,10 @@ final class PayrollService {
 
 		Database::beginTransaction();
 		try {
-			foreach ($validSalaries as $employeeId => $salary) {
-				EmployeeSalary::upsertForEmployee($clientId, $employeeId, $salary, $userId);
+			foreach ($validSalaries as $employeeId => $validated) {
+				EmployeeSalary::upsertForEmployee($clientId, $employeeId, $validated['salary'], $userId);
+				EmployeePayItemAmount::replaceForEmployee($clientId, $employeeId, $validated['pay_item_amounts']);
+				EmployeeTaxRelief::replaceForEmployee($clientId, $employeeId, $validated['relief_claims']);
 			}
 			Database::commit();
 		} catch (\Throwable $e) {
@@ -120,40 +138,127 @@ final class PayrollService {
 	}
 
 	/**
-	 * Check one salary as typed or imported, and shape it for storage.
+	 * Check one salary as typed, and shape it for storage.
 	 *
-	 * @param array $input   basic_salary, flat_allowance
-	 * @param array $rateSet Rates the salary is worked out against.
-	 * @return array{salary: ?array, field: ?string, error: ?string}
+	 * @param array $input    basic_salary, tier3_percent, pay_items [pay_item_id => amount], reliefs [relief_code => claim_count]
+	 * @param array $payItems The Client's pay items (ClientPayItem::listForClient()).
+	 * @param array $rateSet  Rates the salary is worked out against.
+	 * @return array{salary: ?array, pay_item_amounts: array<int, float>, relief_claims: array<string, int>, field: ?string, error: ?string}
 	 */
-	public function validateSalaryInput(array $input, array $rateSet): array {
-		$fail = static fn(string $field, string $error): array => ['salary' => null, 'field' => $field, 'error' => $error];
+	public function validateSalaryInput(array $input, array $payItems, array $rateSet): array {
+		$fail = static fn(string $field, string $error): array => [
+			'salary' => null, 'pay_item_amounts' => [], 'relief_claims' => [], 'field' => $field, 'error' => $error,
+		];
 
 		$basicSalary = $this->parseAmount($input['basic_salary'] ?? null);
 		if ($basicSalary === null) {
 			return $fail('basic_salary', 'Enter a basic salary of 0 or more.');
 		}
 
-		$flatAllowanceInput = trim((string) ($input['flat_allowance'] ?? ''));
-		$flatAllowance      = $flatAllowanceInput === '' ? 0.0 : $this->parseAmount($flatAllowanceInput);
-		if ($flatAllowance === null) {
-			return $fail('flat_allowance', 'Enter an allowance of 0 or more.');
+		$tier3Input   = trim((string) ($input['tier3_percent'] ?? ''));
+		$tier3Percent = $tier3Input === '' ? 0.0 : $this->parsePercent($tier3Input);
+		if ($tier3Percent === null) {
+			return $fail('tier3_percent', 'Enter Tier 3 as a percentage from 0 to 100.');
 		}
 
+		$payItemIds     = array_map(static fn(array $payItem): int => (int) $payItem['pay_item_id'], $payItems);
+		$payItemAmounts = [];
+		foreach ((array) ($input['pay_items'] ?? []) as $payItemId => $amountInput) {
+			$payItemId = (int) $payItemId;
+			if (!in_array($payItemId, $payItemIds, true)) {
+				return $fail("pay_items][{$payItemId}", 'This pay item is not one of this client\'s.');
+			}
+			$amount = trim((string) $amountInput) === '' ? 0.0 : $this->parseAmount($amountInput);
+			if ($amount === null) {
+				return $fail("pay_items][{$payItemId}", 'Enter an amount of 0 or more.');
+			}
+			if ($amount > 0) {
+				$payItemAmounts[$payItemId] = $amount;
+			}
+		}
+
+		$reliefClaims = [];
+		foreach ((array) ($input['reliefs'] ?? []) as $reliefCode => $claimCountInput) {
+			$reliefCode = (string) $reliefCode;
+			$claimCount = filter_var($claimCountInput, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0, 'max_range' => self::MAX_RELIEF_CLAIMS]]);
+			if (!TaxReliefTypes::isKnown($reliefCode) || $claimCount === false) {
+				return $fail('reliefs', 'Choose the reliefs this employee claims.');
+			}
+			if ($claimCount > 0) {
+				$reliefClaims[$reliefCode] = $claimCount;
+			}
+		}
+
+		$salary = ['basic_salary' => $basicSalary, 'tier3_percent' => $tier3Percent];
 		try {
-			PayrollCalculator::compute($basicSalary, $flatAllowance, $rateSet);
+			PayrollCalculator::compute($this->payInputs($salary, $payItemAmounts, $reliefClaims, $payItems), $rateSet);
 		} catch (\InvalidArgumentException $e) {
-			return $fail('flat_allowance', $e->getMessage());
+			return $fail('pay', $e->getMessage());
+		}
+
+		return ['salary' => $salary, 'pay_item_amounts' => $payItemAmounts, 'relief_claims' => $reliefClaims, 'field' => null, 'error' => null];
+	}
+
+	/**
+	 * Every employee's stored pay item amounts and relief claims.
+	 *
+	 * @return array{amounts: array<int, array<int, float>>, reliefs: array<int, array<string, int>>} keyed by employee_id.
+	 */
+	public function storedPayInputsByEmployee(int $clientId): array {
+		$amountsByEmployee = [];
+		foreach (EmployeePayItemAmount::listForClient($clientId) as $heldAmount) {
+			$amountsByEmployee[(int) $heldAmount['employee_id']][(int) $heldAmount['pay_item_id']] = (float) $heldAmount['amount'];
+		}
+		$reliefsByEmployee = [];
+		foreach (EmployeeTaxRelief::listForClient($clientId) as $reliefClaim) {
+			$reliefsByEmployee[(int) $reliefClaim['employee_id']][$reliefClaim['relief_code']] = (int) $reliefClaim['claim_count'];
+		}
+		return ['amounts' => $amountsByEmployee, 'reliefs' => $reliefsByEmployee];
+	}
+
+	/**
+	 * What PayrollCalculator::compute() takes for one salary.
+	 *
+	 * @param array               $salary         basic_salary, tier3_percent
+	 * @param array<int, float>   $payItemAmounts Keyed by pay_item_id.
+	 * @param array<string, int>  $reliefClaims   Keyed by relief_code.
+	 * @param array               $payItems       The Client's pay items, in display order.
+	 */
+	public function payInputs(array $salary, array $payItemAmounts, array $reliefClaims, array $payItems): array {
+		$allowances = [];
+		$deductions = [];
+		foreach ($payItems as $payItem) {
+			$amount = $payItemAmounts[(int) $payItem['pay_item_id']] ?? 0.0;
+			if ($amount <= 0) {
+				continue;
+			}
+			if ($payItem['item_kind'] === ClientPayItem::KIND_ALLOWANCE) {
+				$allowances[] = ['item_name' => $payItem['item_name'], 'amount' => $amount, 'is_taxable' => (bool) $payItem['is_taxable']];
+			} else {
+				$deductions[] = ['item_name' => $payItem['item_name'], 'amount' => $amount];
+			}
 		}
 
 		return [
-			'salary' => [
-				'basic_salary'   => $basicSalary,
-				'flat_allowance' => $flatAllowance,
-			],
-			'field' => null,
-			'error' => null,
+			'basic_salary'  => (float) $salary['basic_salary'],
+			'tier3_percent' => (float) ($salary['tier3_percent'] ?? 0),
+			'allowances'    => $allowances,
+			'deductions'    => $deductions,
+			'relief_claims' => $reliefClaims,
 		];
+	}
+
+	/**
+	 * A typed amount as a float, or null when it is not a number from 0 up to what the column holds.
+	 * Thousands separators are accepted ("4,000.00").
+	 */
+	public function parseAmount(mixed $rawAmount): ?float {
+		$cleaned = str_replace([',', ' '], '', trim((string) $rawAmount));
+		if ($cleaned === '' || !is_numeric($cleaned)) {
+			return null;
+		}
+		$amount = round((float) $cleaned, 2);
+		return ($amount < 0 || $amount > self::MAX_AMOUNT) ? null : $amount;
 	}
 
 	// -------------------------------------------------------------------------
@@ -165,15 +270,47 @@ final class PayrollService {
 	}
 
 	/**
-	 * A Client's run with its lines, or null when it is not theirs.
+	 * A Client's run with its lines, each with its allowances, deductions and reliefs, or null when it is
+	 * not theirs.
 	 */
 	public function findRun(int $payrollRunId, int $clientId): ?array {
 		$run = PayrollRun::findForClient($payrollRunId, $clientId);
 		if ($run === null) {
 			return null;
 		}
+
+		$itemsByLine = [];
+		foreach (PayrollRun::getLineItems($payrollRunId, $clientId) as $lineItem) {
+			$itemsByLine[(int) $lineItem['payroll_run_line_id']][] = $lineItem;
+		}
+
 		$run['lines'] = PayrollRun::getLines($payrollRunId, $clientId);
+		foreach ($run['lines'] as $lineIndex => $line) {
+			$run['lines'][$lineIndex]['items'] = $itemsByLine[(int) $line['payroll_run_line_id']] ?? [];
+		}
 		return $run;
+	}
+
+	/**
+	 * One employee's payslips: every finalised or paid run they were paid in, latest month first, each line
+	 * with its items and the rates its run was worked out at. Null when the employee is not this Client's.
+	 */
+	public function payslipsForEmployee(int $employeeId, int $clientId): ?array {
+		$employee = Employee::findForClient($employeeId, $clientId);
+		if ($employee === null) {
+			return null;
+		}
+
+		$itemsByLine = [];
+		foreach (PayrollRun::getIssuedLineItemsForEmployee($employeeId, $clientId) as $lineItem) {
+			$itemsByLine[(int) $lineItem['payroll_run_line_id']][] = $lineItem;
+		}
+
+		$payslips = PayrollRun::getIssuedLinesForEmployee($employeeId, $clientId);
+		foreach ($payslips as $payslipIndex => $payslip) {
+			$payslips[$payslipIndex]['items'] = $itemsByLine[(int) $payslip['payroll_run_line_id']] ?? [];
+		}
+		return ['employee' => $employee, 'payslips' => $payslips];
 	}
 
 	/**
@@ -371,10 +508,6 @@ final class PayrollService {
 		return $run;
 	}
 
-	private function computePay(array $salary, array $rateSet): array {
-		return PayrollCalculator::compute((float) $salary['basic_salary'], (float) $salary['flat_allowance'], $rateSet);
-	}
-
 	/**
 	 * One line per payable employee for the month, and the totals of each figure.
 	 *
@@ -382,15 +515,21 @@ final class PayrollService {
 	 * @throws \InvalidArgumentException Naming the employee whose salary cannot be worked out.
 	 */
 	private function workOutLines(int $clientId, string $payPeriod, array $rateSet): array {
-		$periodEnd = date('Y-m-t', strtotime($payPeriod));
-		$lines     = [];
+		$periodEnd    = date('Y-m-t', strtotime($payPeriod));
+		$payItems     = ClientPayItem::listForClient($clientId);
+		$storedInputs = $this->storedPayInputsByEmployee($clientId);
+		$lines        = [];
 		// Totals are summed in pesewas so they equal the sum of the lines exactly.
-		$totalPesewas = array_fill_keys(array_keys(self::TOTAL_COLUMNS), 0);
+		$totalPesewas = array_fill_keys(PayrollCalculator::FIGURES, 0);
 
 		foreach (EmployeeSalary::payableForClient($clientId, $periodEnd) as $lineIndex => $employee) {
+			$employeeId   = (int) $employee['employee_id'];
 			$employeeName = trim($employee['first_name'] . ' ' . $employee['last_name']);
 			try {
-				$pay = $this->computePay($employee, $rateSet);
+				$pay = PayrollCalculator::compute(
+					$this->payInputs($employee, $storedInputs['amounts'][$employeeId] ?? [], $storedInputs['reliefs'][$employeeId] ?? [], $payItems),
+					$rateSet
+				);
 			} catch (\InvalidArgumentException $e) {
 				throw new \InvalidArgumentException("Salary for {$employeeName}: " . $e->getMessage());
 			}
@@ -400,12 +539,14 @@ final class PayrollService {
 			}
 
 			$lines[] = [
-				'employee_id'     => (int) $employee['employee_id'],
-				'line_order'      => $lineIndex + 1,
-				'employee_name'   => $employeeName,
-				'employee_code'   => $employee['employee_code'],
-				'job_title_name'  => $employee['job_title_name'],
-				'department_name' => $employee['department_name'],
+				'employee_id'               => $employeeId,
+				'line_order'                => $lineIndex + 1,
+				'employee_name'             => $employeeName,
+				'employee_code'             => $employee['employee_code'],
+				'job_title_name'            => $employee['job_title_name'],
+				'department_name'           => $employee['department_name'],
+				'ssnit_number'              => $employee['ssnit_number'],
+				'tax_identification_number' => $employee['tax_identification_number'],
 			] + $pay;
 		}
 
@@ -416,13 +557,14 @@ final class PayrollService {
 	}
 
 	/**
-	 * Would Recalculate change this draft? True when the employees paid or any of their figures
-	 * differ from what the current salaries and rates give.
+	 * Would Recalculate change this draft? True when the employees paid, any of their figures, or the
+	 * allowances, deductions and reliefs that make them up differ from what the current salaries and
+	 * rates give.
 	 */
 	private function draftIsStale(array $run, int $clientId): bool {
 		$rateSet = $this->requireRateSet((string) $run['pay_period']);
 		$current = $this->workOutLines($clientId, (string) $run['pay_period'], $rateSet)['lines'];
-		$stored  = PayrollRun::getLines((int) $run['payroll_run_id'], $clientId);
+		$stored  = ($this->findRun((int) $run['payroll_run_id'], $clientId) ?? [])['lines'] ?? [];
 
 		if (count($current) !== count($stored)) {
 			return true;
@@ -437,13 +579,29 @@ final class PayrollService {
 			if ($storedLine === null) {
 				return true;
 			}
-			foreach (array_keys(self::TOTAL_COLUMNS) as $figure) {
+			foreach (PayrollCalculator::FIGURES as $figure) {
 				if ((int) round($currentLine[$figure] * 100) !== (int) round((float) $storedLine[$figure] * 100)) {
 					return true;
 				}
 			}
+			if ($this->itemsFingerprint($currentLine['items']) !== $this->itemsFingerprint($storedLine['items'])) {
+				return true;
+			}
 		}
 		return false;
+	}
+
+	/** A line's items reduced to what matters for comparing two of them: kind, name, tax and amount. */
+	private function itemsFingerprint(array $lineItems): string {
+		return implode('|', array_map(
+			static fn(array $lineItem): string => implode(':', [
+				$lineItem['item_kind'],
+				$lineItem['item_name'],
+				$lineItem['is_taxable'] === null ? '' : ((bool) $lineItem['is_taxable'] ? '1' : '0'),
+				(int) round((float) $lineItem['amount'] * 100),
+			]),
+			$lineItems
+		));
 	}
 
 	/** Run columns that follow from the rate set and the worked-out lines. */
@@ -452,30 +610,37 @@ final class PayrollService {
 			'statutory_rate_id'      => (int) $rateSet['statutory_rate_id'],
 			'employee_ssnit_percent' => $rateSet['employee_ssnit_percent'],
 			'employer_ssnit_percent' => $rateSet['employer_ssnit_percent'],
+			'ssnit_tier1_percent'    => $rateSet['ssnit_tier1_percent'],
 			'employee_count'         => count($worked['lines']),
 		];
-		foreach (self::TOTAL_COLUMNS as $figure => $totalColumn) {
-			$figures[$totalColumn] = $worked['totals'][$figure];
+		foreach (PayrollCalculator::FIGURES as $figure) {
+			$figures['total_' . $figure] = $worked['totals'][$figure];
 		}
 		return $figures;
 	}
 
 	private function insertLines(int $payrollRunId, int $clientId, array $lines): void {
 		foreach ($lines as $line) {
-			PayrollRun::insertLine(['payroll_run_id' => $payrollRunId, 'client_id' => $clientId] + $line);
+			$lineItems = $line['items'];
+			unset($line['items']);
+
+			$payrollRunLineId = PayrollRun::insertLine(['payroll_run_id' => $payrollRunId, 'client_id' => $clientId] + $line);
+			foreach ($lineItems as $itemIndex => $lineItem) {
+				PayrollRun::insertLineItem([
+					'client_id'           => $clientId,
+					'payroll_run_line_id' => $payrollRunLineId,
+					'item_order'          => $itemIndex + 1,
+				] + $lineItem);
+			}
 		}
 	}
 
-	/**
-	 * A typed amount as a float, or null when it is not a number from 0 up to what the column holds.
-	 * Thousands separators are accepted ("4,000.00").
-	 */
-	private function parseAmount(mixed $rawAmount): ?float {
-		$cleaned = str_replace([',', ' '], '', trim((string) $rawAmount));
+	private function parsePercent(mixed $rawPercent): ?float {
+		$cleaned = trim((string) $rawPercent);
 		if ($cleaned === '' || !is_numeric($cleaned)) {
 			return null;
 		}
-		$amount = round((float) $cleaned, 2);
-		return ($amount < 0 || $amount > self::MAX_AMOUNT) ? null : $amount;
+		$percent = round((float) $cleaned, 2);
+		return ($percent < 0 || $percent > 100) ? null : $percent;
 	}
 }

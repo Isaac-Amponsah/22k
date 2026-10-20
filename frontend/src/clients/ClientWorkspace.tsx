@@ -19,6 +19,7 @@ export function useClientInScope(): Client {
 const SECTIONS = [
   { path: "payroll", label: "Payroll" },
   { path: "salaries", label: "Salaries" },
+  { path: "pay-items", label: "Allowances & deductions" },
   { path: "employees", label: "Employees" },
   { path: "bank", label: "Bank" },
 ];
